@@ -2,7 +2,7 @@
 
 Lightweight Claude Code plugin: `/lite:build` runs a defined idea through Plan → Build (TDD) → Test → Review → PR — good-practice code quality, prototype-grade ceremony.
 
-**Status: scaffold only.** This repo currently contains the spec (`PLAN.md`) and the pickup-ready task list (`TASKS.md`). No agents, skills, or hooks are implemented yet — the directories exist as placeholders for the work described in `TASKS.md`.
+**Status: implemented (L1-L6 landed, L7 E2E validation in progress).** Agents, skills, and hooks described in `PLAN.md` are in place; see `TASKS.md` for the L1-L8 pickup order and current status.
 
 See `PLAN.md` for the full design (pipeline, agent roster, Iron Law enforcement mapping, memory/resume model, install/usage). See `TASKS.md` for the L1–L8 implementation order.
 
