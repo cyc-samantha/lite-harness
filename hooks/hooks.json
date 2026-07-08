@@ -75,6 +75,21 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash",
+            "args": [
+              "-lc",
+              "h=\"${CLAUDE_PLUGIN_ROOT:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/hooks/session-notice.sh\"; [ -x \"$h\" ] && exec \"$h\" || exit 0"
+            ],
+            "timeout": 5000
+          }
+        ]
+      }
     ]
   }
 }
