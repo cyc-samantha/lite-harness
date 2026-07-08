@@ -1,0 +1,6 @@
+{
+  "name": "lite",
+  "version": "0.0.0",
+  "description": "Lightweight prototype-grade pipeline: Plan -> Build (TDD) -> Test -> Review -> PR. Not yet implemented — see PLAN.md and TASKS.md.",
+  "status": "scaffold-only"
+}
