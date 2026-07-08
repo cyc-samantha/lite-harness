@@ -1,0 +1,58 @@
+#!/usr/bin/env bats
+# main-branch-guard.sh (lite) — Iron Law 4 + Iron Law 8 fail-closed tests.
+#
+# Per Iron Law 8 each gate ships two tests:
+#   (a) revert-goes-RED: a bare forbidden command is BLOCKED (status 2). Reverting
+#       the hook's final `exit 2` to `exit 0` makes this assertion fail — proving
+#       the test exercises the guard, not a tautology.
+#   (b) unevaluable-input-refuses: a forbidden command with an EMPTY `cd`
+#       delegation target (unevaluable delegation) is still BLOCKED, not allowed.
+
+setup() {
+  HOOK="$(cd "$BATS_TEST_DIRNAME/../../hooks" && pwd)/main-branch-guard.sh"
+}
+
+_run_guard() {
+  printf '{"tool_name":"Bash","tool_input":{"command":%s}}' \
+    "$(printf '%s' "$1" | jq -Rs .)" | bash "$HOOK"
+}
+
+@test "(a) bare git checkout is blocked" {
+  run _run_guard 'git checkout some-branch'
+  [ "$status" -eq 2 ]
+}
+
+@test "(a) bare git reset --hard is blocked" {
+  run _run_guard 'git reset --hard HEAD~1'
+  [ "$status" -eq 2 ]
+}
+
+@test "(a) bare gh pr create is blocked" {
+  run _run_guard 'gh pr create --fill'
+  [ "$status" -eq 2 ]
+}
+
+@test "valid git -C delegation is allowed" {
+  run _run_guard 'git -C /path/to/.claude/worktrees/wt checkout some-branch'
+  [ "$status" -eq 0 ]
+}
+
+@test "valid cd delegation is allowed" {
+  run _run_guard 'cd "$WORKTREE" && git merge feature'
+  [ "$status" -eq 0 ]
+}
+
+@test "non-mutating git command is allowed" {
+  run _run_guard 'git status'
+  [ "$status" -eq 0 ]
+}
+
+@test "(b) forbidden command with empty cd target refuses (fail-closed)" {
+  run _run_guard "cd '' && git checkout main"
+  [ "$status" -eq 2 ]
+}
+
+@test "(b) empty command no-ops safely" {
+  run bash -c 'printf "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\"}}" | bash "$1"' _ "$HOOK"
+  [ "$status" -eq 0 ]
+}
