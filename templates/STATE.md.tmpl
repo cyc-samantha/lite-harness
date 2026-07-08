@@ -1,0 +1,52 @@
+<!--
+  STATE.md.tmpl — run-state file template (PLAN.md §5 "Memory & resume").
+
+  WHERE THIS FILE LIVES ON DISK (not in git):
+    $CLAUDE_PLUGIN_DATA/runs/<slug>/STATE.md
+
+  This is ephemeral, per-machine plugin data — it is NOT committed to the
+  worktree branch and is NOT git-tracked at all. It exists purely so a
+  brand-new session with zero context can resume a run (usage-limit /
+  crash survival). The run's actual deliverable — `plan.md` — is the
+  artifact that DOES get committed to the worktree branch; see
+  `templates/plan.md.tmpl` and `templates/README.md` for that half of the
+  split.
+
+  FILL-IN CONVENTION: replace every `<angle-bracket>` placeholder below.
+  Checkbox sections use `- [ ]` / `- [x]` per item, matching PLAN.md §5's
+  own example verbatim.
+
+  FRONTMATTER NOTE: `last_seen` is NOT part of the initial file — it is
+  injected by `hooks/state-checkpoint.sh` (Stop + SubagentStop hook) the
+  first time the run stops, and re-stamped on every stop after that. Do
+  not author it here; the hook adds it as the first frontmatter key. The
+  hook also owns re-stamping `phase` when `$LITE_PHASE` is set — keep this
+  file's `phase:` key name and its enum exactly as below so the hook's
+  `frontmatter_has "phase"` / overwrite logic matches on the first try.
+-->
+---
+idea: "<one-line idea>"
+repo: <path>
+branch: lite/<slug>
+worktree: <path>
+created: <2026-07-08T10:00:00Z>
+phase: <plan | build | test | review | pr | done>
+review_loops: <0>
+---
+## Phases
+- [ ] Plan      (plan.md committed @ <sha>)
+- [ ] Build     (task <n>/<total>, last commit <sha>)
+- [ ] Test
+- [ ] Review
+- [ ] PR
+
+## Task breakdown  (from plan.md, checkbox per slice)
+- [ ] <T1: slice name> — AC: <criterion summary>
+- [ ] <T2: slice name> — AC: <criterion summary>
+- [ ] <T3: slice name> — AC: <criterion summary>   ← IN PROGRESS: <one line of where SE stopped>
+
+## Open findings (QE/reviewer → SE)
+- (none)
+
+## Decisions log
+- <date>: chose <X> over <Y> because <reason>
