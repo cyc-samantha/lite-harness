@@ -20,12 +20,22 @@
 # Reverting the `exit 2` on a tracked path makes the block test go RED.
 #
 # Reads PreToolUse JSON from stdin: {tool_input.file_path, subagent_type}.
+#
+# Trusted-caller signal (SEC-MED-2 pattern, mirrored from the heavy harness's
+# vlm-critic-read-guard.sh): the top-level `.subagent_type` JSON field is not
+# always present on a real subagent Write/Edit event. When it's absent, this
+# guard also honors the `CLAUDE_SUBAGENT_TYPE` env var the orchestrator sets
+# on a subagent's spawn env — either signal being non-empty passes the caller
+# through as trusted. Without this fallback, a missing JSON field would make
+# a genuine software-engineer/qa-engineer write fall through to
+# is_protected_path and get blocked in its own worktree (Build dies on arrival).
 
 set -uo pipefail
 
 INPUT="$(cat 2>/dev/null || true)"
 FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
 SUBAGENT_TYPE="$(printf '%s' "$INPUT" | jq -r '.subagent_type // empty' 2>/dev/null)"
+[[ -z "$SUBAGENT_TYPE" ]] && SUBAGENT_TYPE="${CLAUDE_SUBAGENT_TYPE:-}"
 
 # exit 0 = ALLOW (write here), exit 2 = BLOCK.
 is_protected_path() {
@@ -54,8 +64,10 @@ is_protected_path() {
 is_allowlisted() {
   local p="$1"
   [[ "$p" =~ /\.claude/worktrees/ ]] && return 0
-  [[ "$p" =~ \.token$ ]] && return 0
-  [[ "$p" =~ /runs/.*\.md$ ]] && return 0
+  [[ "$p" =~ (^|/)[^/]+\.token$ ]] && return 0
+  # Anchored to the runs/<slug>/ state-dir shape (NOT a bare /runs/ substring
+  # match, which would over-match e.g. docs/runs/setup.md).
+  [[ "$p" =~ /runs/[^/]+/[^/]+\.md$ ]] && return 0
   [[ "$p" =~ /pipeline-state/.*\.md$ ]] && return 0
   return 1
 }

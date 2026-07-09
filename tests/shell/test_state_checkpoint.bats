@@ -3,9 +3,10 @@
 #
 # Per Iron Law 8 each gate ships two tests:
 #   (a) revert-goes-RED: a file with NO YAML frontmatter is left UNCHANGED (the
-#       hook no-ops rather than corrupt it). Reverting the frontmatter guard
-#       (`[[ "$first_line" == "---" ]] || exit 0`) makes the hook stamp the file,
-#       turning the "unchanged" assertion RED — proving the test exercises it.
+#       hook no-ops rather than corrupt it). Reverting the awk-derived
+#       `fence_end` frontmatter-close gate in state-checkpoint.sh makes the
+#       hook stamp the file regardless, turning the "unchanged" assertion RED —
+#       proving the test exercises it.
 #   (b) unevaluable-input-refuses: a missing/empty path no-ops safely (status 0,
 #       no file created, no crash).
 

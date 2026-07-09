@@ -17,7 +17,9 @@ setup() {
   printf 'tracked\n' > "$TMP_REPO/tracked.md"
   mkdir -p "$TMP_REPO/src"
   printf 'code\n' > "$TMP_REPO/src/app.js"
-  git -C "$TMP_REPO" add tracked.md src/app.js
+  mkdir -p "$TMP_REPO/docs/runs"
+  printf 'not a run state file\n' > "$TMP_REPO/docs/runs/setup.md"
+  git -C "$TMP_REPO" add tracked.md src/app.js docs/runs/setup.md
   git -C "$TMP_REPO" commit -qm init
 }
 
@@ -43,6 +45,16 @@ _run_guard() {
 @test "subagent writing a tracked file is allowed" {
   run _run_guard "$TMP_REPO/tracked.md" "software-engineer"
   [ "$status" -eq 0 ]
+}
+
+@test "SEC-MED-2 fallback: subagent write with no JSON subagent_type field but CLAUDE_SUBAGENT_TYPE env var set is allowed" {
+  CLAUDE_SUBAGENT_TYPE="software-engineer" run _run_guard "$TMP_REPO/tracked.md" ""
+  [ "$status" -eq 0 ]
+}
+
+@test "tracked docs/runs/ path is NOT allowlisted by the anchored runs pattern (over-match regression guard)" {
+  run _run_guard "$TMP_REPO/docs/runs/setup.md" ""
+  [ "$status" -eq 2 ]
 }
 
 @test "allowlisted STATE.md under runs/ is allowed" {

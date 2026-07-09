@@ -19,11 +19,11 @@ Read the idea from the invocation args (the text after `/lite:build`).
 ## Step 2 — Create run state, branch, and worktree
 
 1. Derive `slug` = kebab-case of the idea + today's date (e.g. `photo-dedupe-2026-07-09`).
-2. Write `$CLAUDE_PLUGIN_DATA/runs/<slug>/STATE.md` from `templates/STATE.md.tmpl`, filling in `idea`, `repo` (current project root), `branch: lite/<slug>`, `worktree`, `created` (UTC now), `phase: plan`, `review_loops: 0`. This path is allowlisted for the orchestrator (Iron Law 3 exemption: `.md` under `runs/`) — write it directly, do not delegate.
-3. Create the branch and worktree from the project's default branch:
+2. Write `$CLAUDE_PLUGIN_DATA/runs/<slug>/STATE.md` from `templates/STATE.md.tmpl`, filling in `idea`, `repo` (current project root), `branch: lite/<slug>`, `worktree` (pinned convention below), `created` (UTC now), `phase: plan`, `review_loops: 0`. This path is allowlisted for the orchestrator (Iron Law 3 exemption: `.md` under `runs/`) — write it directly, do not delegate.
+3. Create the branch and worktree from the project's default branch, at the **pinned path convention** `.claude/worktrees/<slug>` (mirroring the heavy harness's `.claude/worktrees/agent-*` convention) — this is required, not a suggestion: `orchestrator-guard.sh`'s only path-based backstop for subagent writes matches `/\.claude/worktrees/`, so any other location loses that backstop entirely:
    ```
    git branch lite/<slug> <default-branch>
-   git worktree add <worktree-path> lite/<slug>
+   git worktree add .claude/worktrees/<slug> lite/<slug>
    ```
    Keep it lite: no reaper process, no manifest registry — just the one worktree for this run, removed by the user (or a future cleanup skill) once the PR merges.
 4. Set `$LITE_STATE_FILE` and `$LITE_PHASE=plan` in the environment used for subsequent tool calls so `state-checkpoint.sh` stamps the right file on every Stop/SubagentStop.

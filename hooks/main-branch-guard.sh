@@ -5,9 +5,12 @@
 #
 # Blocks bare HEAD-mutating commands: git checkout / switch / reset --hard /
 # merge / rebase, and gh pr create. A command is ALLOWED only when it carries
-# a recognized delegation prefix that targets a worktree rather than the main
-# checkout: `git -C <path> ...`, `git --git-dir=<path> ...`, or a leading
-# `cd <path> && ...`.
+# a recognized delegation prefix: `git -C <path> ...`, `git --git-dir=<path>
+# ...`, or a leading `cd <path> && ...`. Known limitation (shared with the
+# heavy harness's equivalent guard): this hook does not verify the delegation
+# target actually IS a worktree path — any non-empty `cd`/`-C`/`--git-dir`
+# target is accepted as valid delegation. Enforcing "targets a worktree" is a
+# separate, not-yet-built check.
 #
 # Iron Law 8 (fail-closed): a forbidden command whose delegation target cannot
 # be evaluated (empty `cd` target) is BLOCKED, never silently allowed. Reverting

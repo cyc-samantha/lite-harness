@@ -42,9 +42,9 @@ Every re-spawned agent's prompt includes: "Read `${CLAUDE_PLUGIN_ROOT}/rules/cor
 
 Before spawning anything in Steps 2-3, check `<worktree>` (the path in STATE.md frontmatter) actually exists on disk.
 
-- If it is missing (e.g. machine cleanup wiped `/tmp` or a scratch dir) but `git rev-parse --verify <branch>` (the `branch` field in STATE.md frontmatter) succeeds, **nothing is lost** — the branch carries every committed slice:
+- If it is missing (e.g. machine cleanup wiped `/tmp` or a scratch dir) but `git rev-parse --verify <branch>` (the `branch` field in STATE.md frontmatter) succeeds, **nothing is lost** — the branch carries every committed slice. Recreate at the pinned path convention `.claude/worktrees/<slug>` (matching `skills/build/SKILL.md` Step 2's creation convention, and the only path `orchestrator-guard.sh`'s `/\.claude/worktrees/` backstop matches):
   ```
-  git worktree add <worktree-path> <branch>
+  git worktree add .claude/worktrees/<slug> <branch>
   ```
   Recreate at the same `worktree` path recorded in STATE.md so the rest of this skill's assumptions (and any relative paths agents were given) still hold. Then proceed with Step 2's reconciliation as normal.
 - If the branch itself is also gone, this run cannot be resumed — tell the user and stop; do not fabricate a new branch under the same slug, since that would silently discard the run's history.
