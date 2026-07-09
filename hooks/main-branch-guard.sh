@@ -17,8 +17,21 @@
 # the final `exit 2` makes the block tests go RED.
 #
 # Reads Claude Code PreToolUse JSON from stdin: {tool_name, tool_input.command}.
+#
+# RUN-SCOPED (F6): this is a usability guard, not an always-on control. It only
+# enforces while a lite run is in flight — outside a /lite:build run it would
+# just block ordinary interactive git in every project the plugin is enabled in.
+# `LITE_GUARDS=off` force-disables it regardless of run state. If run-state can't
+# be evaluated, lite_has_active_run reports "no active run" and we allow — the
+# fail-safe default for a usability guard (see lite-paths.sh for the rationale).
 
 set -uo pipefail
+
+[[ "${LITE_GUARDS:-}" == "off" ]] && exit 0
+_LITE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/_lib" && pwd 2>/dev/null)" || exit 0
+# shellcheck source=hooks/_lib/lite-paths.sh
+source "$_LITE_LIB_DIR/lite-paths.sh" 2>/dev/null || exit 0
+lite_has_active_run || exit 0
 
 INPUT="$(cat 2>/dev/null || true)"
 TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)"

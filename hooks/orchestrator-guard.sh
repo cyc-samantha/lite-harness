@@ -29,8 +29,21 @@
 # through as trusted. Without this fallback, a missing JSON field would make
 # a genuine software-engineer/qa-engineer write fall through to
 # is_protected_path and get blocked in its own worktree (Build dies on arrival).
+#
+# RUN-SCOPED (F6): this is a usability guard, not an always-on control. It only
+# enforces while a lite run is in flight — outside a /lite:build run it would
+# just block ordinary interactive edits in every project the plugin is enabled
+# in. `LITE_GUARDS=off` force-disables it regardless of run state. If run-state
+# can't be evaluated, lite_has_active_run reports "no active run" and we allow —
+# the fail-safe default for a usability guard (see lite-paths.sh for rationale).
 
 set -uo pipefail
+
+[[ "${LITE_GUARDS:-}" == "off" ]] && exit 0
+_LITE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/_lib" && pwd 2>/dev/null)" || exit 0
+# shellcheck source=hooks/_lib/lite-paths.sh
+source "$_LITE_LIB_DIR/lite-paths.sh" 2>/dev/null || exit 0
+lite_has_active_run || exit 0
 
 INPUT="$(cat 2>/dev/null || true)"
 FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"

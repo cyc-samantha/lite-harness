@@ -7,46 +7,25 @@
 # with the user (PLAN.md §5). This is advisory UX, not a security or
 # correctness gate (no test-mutation, no protected write, no blocking
 # decision) — a single smoke test covering "prints when a run exists" /
-# "no-ops silently when none exist" is sufficient, not the full Iron Law 8
-# two-test treatment.
+# "no-ops when none exist" is sufficient, not the full Iron Law 8 two-test
+# treatment.
 #
-# Contract: reads $CLAUDE_PLUGIN_DATA/runs/*/STATE.md, picks the most
-# recently active non-done run (by last_seen, falling back to created),
-# prints one line, exits 0. Never mutates a STATE.md, never spawns anything.
+# Contract: reads the shared run store (see hooks/_lib/lite-paths.sh —
+# resolves via ${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/
+# runs, never a bare unset "$CLAUDE_PLUGIN_DATA"), picks the most recently
+# active non-done run, prints one line, exits 0. Never mutates, never spawns.
 
 set -uo pipefail
 
-RUNS_DIR="${CLAUDE_PLUGIN_DATA:-}/runs"
-[[ -n "${CLAUDE_PLUGIN_DATA:-}" && -d "$RUNS_DIR" ]] || exit 0
+_LITE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/_lib" && pwd 2>/dev/null)" || exit 0
+# shellcheck source=hooks/_lib/lite-paths.sh
+source "$_LITE_LIB_DIR/lite-paths.sh" 2>/dev/null || exit 0
 
-frontmatter_value() {
-  local file="$1" key="$2"
-  awk -v key="$key" '
-    NR==1 && $0!="---" { exit }
-    NR>1 && $0=="---"  { exit }
-    NR>1 && $0 ~ ("^" key ":") { sub("^" key ": *", ""); gsub(/^"|"$/, ""); print; exit }
-  ' "$file"
-}
-
-best_file=""
-best_stamp=""
-for state_file in "$RUNS_DIR"/*/STATE.md; do
-  [[ -f "$state_file" ]] || continue
-  phase="$(frontmatter_value "$state_file" "phase")"
-  [[ "$phase" == "done" ]] && continue
-  stamp="$(frontmatter_value "$state_file" "last_seen")"
-  [[ -z "$stamp" ]] && stamp="$(frontmatter_value "$state_file" "created")"
-  [[ -z "$stamp" ]] && continue
-  if [[ -z "$best_stamp" || "$stamp" > "$best_stamp" ]]; then
-    best_stamp="$stamp"
-    best_file="$state_file"
-  fi
-done
-
+best_file="$(lite_select_active_run)"
 [[ -n "$best_file" ]] || exit 0
 
 slug="$(basename "$(dirname "$best_file")")"
-phase="$(frontmatter_value "$best_file" "phase")"
+phase="$(lite_frontmatter_value "$best_file" "phase")"
 [[ -n "$phase" ]] || exit 0
 
 printf "Lite run '%s' is in %s — run /lite:resume to continue.\n" "$slug" "$phase"

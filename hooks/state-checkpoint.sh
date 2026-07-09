@@ -15,10 +15,23 @@
 # the gate makes it inject `last_seen` into a non-frontmatter file (corrupting
 # it), which turns the "leaves it unchanged" test RED. The $1/-f guard is the
 # unevaluable-target (missing/empty path) no-op.
+#
+# SELF-LOCATION: env vars exported in one Bash tool call do NOT persist to this
+# hook's process on a later Stop/SubagentStop, so $LITE_STATE_FILE plumbing is
+# unreliable. When neither $1 nor $LITE_STATE_FILE is given, the hook locates the
+# active run itself via the shared selector (hooks/_lib/lite-paths.sh) — the same
+# "non-done, prefer last_seen over created" logic session-notice.sh uses. Zero
+# runs → nothing to stamp → no-op (still fail-closed: never creates a file).
 
 set -uo pipefail
 
 STATE_FILE="${1:-${LITE_STATE_FILE:-}}"
+if [[ -z "$STATE_FILE" ]]; then
+  _LITE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/_lib" && pwd 2>/dev/null)" || exit 0
+  # shellcheck source=hooks/_lib/lite-paths.sh
+  source "$_LITE_LIB_DIR/lite-paths.sh" 2>/dev/null || exit 0
+  STATE_FILE="$(lite_select_active_run)"
+fi
 [[ -n "$STATE_FILE" && -f "$STATE_FILE" && -r "$STATE_FILE" ]] || exit 0
 
 # Line number of the closing `---`, but only when line 1 opens the frontmatter.
