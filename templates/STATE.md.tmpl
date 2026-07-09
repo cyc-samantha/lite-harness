@@ -2,7 +2,9 @@
   STATE.md.tmpl — run-state file template (PLAN.md §5 "Memory & resume").
 
   WHERE THIS FILE LIVES ON DISK (not in git):
-    $CLAUDE_PLUGIN_DATA/runs/<slug>/STATE.md
+    ${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/<slug>/STATE.md
+  (Claude Code does not set CLAUDE_PLUGIN_DATA for plugins, so the fallback
+  chain — matching hooks/_lib/lite-paths.sh — is the real resolved path.)
 
   This is ephemeral, per-machine plugin data — it is NOT committed to the
   worktree branch and is NOT git-tracked at all. It exists purely so a

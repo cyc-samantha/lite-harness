@@ -10,7 +10,16 @@
 
 setup() {
   HOOK="$(cd "$BATS_TEST_DIRNAME/../../hooks" && pwd)/main-branch-guard.sh"
+  # F6: the guard only enforces while a lite run is active. Give every test an
+  # active (non-done) run so the Iron Law 4 block/allow assertions exercise the
+  # guard body; the no-active-run and LITE_GUARDS=off cases override this.
+  export CLAUDE_PLUGIN_DATA="$(mktemp -d)"
+  mkdir -p "$CLAUDE_PLUGIN_DATA/lite/runs/active"
+  printf -- '---\nphase: build\ncreated: 2026-07-09T08:00:00Z\n---\n' \
+    > "$CLAUDE_PLUGIN_DATA/lite/runs/active/STATE.md"
 }
+
+teardown() { rm -rf "$CLAUDE_PLUGIN_DATA"; }
 
 _run_guard() {
   printf '{"tool_name":"Bash","tool_input":{"command":%s}}' \
@@ -54,5 +63,18 @@ _run_guard() {
 
 @test "(b) empty command no-ops safely" {
   run bash -c 'printf "{\"tool_name\":\"Bash\",\"tool_input\":{\"command\":\"\"}}" | bash "$1"' _ "$HOOK"
+  [ "$status" -eq 0 ]
+}
+
+# --- F6: run-scoped enforcement ----------------------------------------------
+
+@test "no active run → forbidden command is allowed (guard is dormant)" {
+  rm -rf "$CLAUDE_PLUGIN_DATA/lite/runs"
+  run _run_guard 'git checkout some-branch'
+  [ "$status" -eq 0 ]
+}
+
+@test "LITE_GUARDS=off → forbidden command is allowed even with an active run" {
+  LITE_GUARDS=off run _run_guard 'git checkout some-branch'
   [ "$status" -eq 0 ]
 }

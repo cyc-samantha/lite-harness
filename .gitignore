@@ -1,0 +1,6 @@
+# Local-only run/scratch state under .claude/ — never committed to this repo.
+# (Line-ending normalization is handled by .gitattributes, not here.)
+.claude/worktrees/
+.claude/agent-memory/
+.claude/pipeline-state/
+.claude/session-memory/

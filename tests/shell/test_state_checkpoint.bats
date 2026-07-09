@@ -57,3 +57,38 @@ teardown() { rm -rf "$WORK"; }
   run bash "$HOOK"
   [ "$status" -eq 0 ]
 }
+
+# --- self-location (F4): no argument → find the active run and stamp it -------
+
+@test "self-locates the single non-done run when called with no argument" {
+  export CLAUDE_PLUGIN_DATA="$WORK"
+  mkdir -p "$WORK/lite/runs/only-run"
+  printf -- '---\nphase: build\ncreated: 2026-07-09T08:00:00Z\n---\n' \
+    > "$WORK/lite/runs/only-run/STATE.md"
+
+  run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  grep -q '^last_seen: ' "$WORK/lite/runs/only-run/STATE.md"
+}
+
+@test "self-locates the most-recently-active among multiple non-done runs" {
+  export CLAUDE_PLUGIN_DATA="$WORK"
+  mkdir -p "$WORK/lite/runs/older" "$WORK/lite/runs/newer"
+  printf -- '---\nphase: build\nlast_seen: 2026-07-01T00:00:00Z\n---\n' \
+    > "$WORK/lite/runs/older/STATE.md"
+  printf -- '---\nphase: review\nlast_seen: 2026-07-09T09:00:00Z\n---\n' \
+    > "$WORK/lite/runs/newer/STATE.md"
+
+  run bash "$HOOK"
+  [ "$status" -eq 0 ]
+  # Newer run got a fresh stamp overwriting its old last_seen; older untouched.
+  ! grep -q '^last_seen: 2026-07-09T09:00:00Z$' "$WORK/lite/runs/newer/STATE.md"
+  grep -q '^last_seen: 2026-07-01T00:00:00Z$' "$WORK/lite/runs/older/STATE.md"
+}
+
+@test "no-ops safely when zero runs exist" {
+  export CLAUDE_PLUGIN_DATA="$WORK"
+  mkdir -p "$WORK/lite/runs"
+  run bash "$HOOK"
+  [ "$status" -eq 0 ]
+}

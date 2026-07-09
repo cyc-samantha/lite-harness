@@ -1,17 +1,17 @@
 # Implementation Task Breakdown
 
-Reference: `PLAN.md`. **Do not start any task until the repo owner explicitly approves implementation.**
+Reference: `PLAN.md`. Status reflects the readiness-review pass: L1-L6 landed, L7 open (has never passed on a fresh checkout — the packaging fixes it depends on landed in this pass), L8 not started.
 
-| # | Task | Owner (heavy-harness role) | AC |
-|---|---|---|---|
-| L1 | Scaffold repo: plugin.json, README, rules/core.md (Iron Laws verbatim + lite phase order + PLAN.md §3 enforcement table) | software-engineer | Plugin installs cleanly; `/lite:` namespace appears |
-| L2 | Port + trim 4 agent files per PLAN.md §2 trim rules | software-engineer | Frontmatter valid; no references to instincts/session-memory/advisor |
-| L3 | Hooks: copy main-branch-guard, write orchestrator-guard + state-checkpoint + advisory code-shape-check; hooks.json | infrastructure-engineer | Each hook has the 2 fail-closed bats tests (Law 8); all green |
-| L4 | STATE.md + plan.md templates; `$CLAUDE_PLUGIN_DATA/runs/` layout | software-engineer | Template fields match PLAN.md §5 exactly |
-| L5 | `/lite:build` SKILL.md per PLAN.md §6 | software-engineer | Dry-run on a toy repo produces plan → PR with ≤5 spawns |
-| L6 | `/lite:resume` + `/lite:status` + SessionStart notice | software-engineer | Kill session mid-build; resume completes the run from first unchecked task |
-| L7 | E2E validation: run a real small idea end-to-end, kill at each phase boundary, resume each time | qa-engineer | All 5 kill-points resume correctly; PR opens; observation line written |
-| L8 | Review pass on the whole plugin (diff-only) | code-reviewer | APPROVED |
+| # | Task | Owner (heavy-harness role) | AC | Status |
+|---|---|---|---|---|
+| L1 | Scaffold repo: plugin.json, README, rules/core.md (Iron Laws verbatim + lite phase order + PLAN.md §3 enforcement table) | software-engineer | Plugin installs cleanly; `/lite:` namespace appears | Done |
+| L2 | Port + trim 4 agent files per PLAN.md §2 trim rules | software-engineer | Frontmatter valid; no references to instincts/session-memory/advisor | Done |
+| L3 | Hooks: copy main-branch-guard, write orchestrator-guard + state-checkpoint + advisory code-shape-check; hooks.json | infrastructure-engineer | Each hook has the 2 fail-closed bats tests (Law 8); all green | Done |
+| L4 | STATE.md + plan.md templates; run-state layout under `${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/` | software-engineer | Template fields match PLAN.md §5 exactly | Done |
+| L5 | `/lite:build` SKILL.md per PLAN.md §6 | software-engineer | Dry-run on a toy repo produces plan → PR with ≤5 spawns | Done |
+| L6 | `/lite:resume` + `/lite:status` + SessionStart notice | software-engineer | Kill session mid-build; resume completes the run from first unchecked task | Done |
+| L7 | E2E validation: run a real small idea end-to-end, kill at each phase boundary, resume each time | qa-engineer | All 5 kill-points resume correctly; PR opens; observation line written | In Progress |
+| L8 | Review pass on the whole plugin (diff-only) | code-reviewer | APPROVED | Not Started |
 
 ## Ordering
 

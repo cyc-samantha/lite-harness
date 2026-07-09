@@ -6,7 +6,7 @@ instead of only in comments.
 
 | File | Lives at | Git-tracked? | Lifetime |
 |---|---|---|---|
-| `STATE.md.tmpl` → `STATE.md` | `$CLAUDE_PLUGIN_DATA/runs/<slug>/STATE.md` | No | Ephemeral, per-machine. Survives a session dying but not a `git clone` elsewhere. |
+| `STATE.md.tmpl` → `STATE.md` | `${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/<slug>/STATE.md` | No | Ephemeral, per-machine. Survives a session dying but not a `git clone` elsewhere. |
 | `plan.md.tmpl` → `plan.md` | `<worktree>/plan.md`, committed to branch `lite/<slug>` | Yes | Durable. Travels with the branch — recreating the worktree from `branch` (PLAN.md §5 Resume flow step 4) recovers it for free. |
 
 ## Why the split
@@ -23,7 +23,7 @@ instead of only in comments.
   §2 is explicit that it "is committed to the worktree branch, not just
   kept in context" — if a session dies mid-build, the branch (and
   therefore `plan.md`) is the one thing guaranteed to still exist even if
-  `$CLAUDE_PLUGIN_DATA` was wiped or the run happens on a different
+  the run store (`${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/`) was wiped or the run happens on a different
   machine.
 
 ## Resume, concretely

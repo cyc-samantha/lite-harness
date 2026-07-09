@@ -1,6 +1,6 @@
 # Lite Harness — Implementation Plan (v1)
 
-**Status:** APPROVED SPEC — not yet implemented. See `TASKS.md` for the pickup order. Do not begin implementation until the repo owner explicitly says go.
+**Status:** L1-L6 landed; L7 (E2E validation) in progress — see `TASKS.md` for per-task status. This document is the design of record; the plugin now implements it (agents, skills, hooks, templates all in place).
 
 **Audience:** the current harness agent team (orchestrator + Opus/Sonnet agents) who will build this.
 **Goal:** a lightweight prototype-grade pipeline: when an idea is already defined, build it safely and fast — agile task breakdown → Plan → Build (SE, TDD) → Test (QE) → PR review — with best-practice code quality (DRY, YAGNI, SOLID, small functions) but *without* the production-grade ceremony (intake fingerprinting, Best-of-N, PDR-RTV, Final Gate quartet, learning loop, eval suite).

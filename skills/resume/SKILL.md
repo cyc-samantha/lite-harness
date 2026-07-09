@@ -9,8 +9,8 @@ You are the **orchestrator** resuming an existing `/lite:build` run. Per `rules/
 
 ## Step 1 — Locate the run
 
-- **Slug given** (`/lite:resume <slug>`): read `$CLAUDE_PLUGIN_DATA/runs/<slug>/STATE.md`. If it does not exist, stop and tell the user no such run was found.
-- **No slug given**: list `$CLAUDE_PLUGIN_DATA/runs/*/STATE.md`, parse each frontmatter `phase`, discard any with `phase: done`. Among the rest, pick the one with the most recent `created` (or `last_seen` if stamped — prefer `last_seen` since it reflects actual last activity, falling back to `created` when `last_seen` is absent). **Announce which run you picked and why** (e.g. "Resuming run 'photo-dedupe-2026-07-09' — last seen 2026-07-09T10:42:00Z, most recent non-done run.").
+- **Slug given** (`/lite:resume <slug>`): read `${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/<slug>/STATE.md`. If it does not exist, stop and tell the user no such run was found.
+- **No slug given**: list `${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/*/STATE.md`, parse each frontmatter `phase`, discard any with `phase: done`. Among the rest, pick the one with the most recent `created` (or `last_seen` if stamped — prefer `last_seen` since it reflects actual last activity, falling back to `created` when `last_seen` is absent). **Announce which run you picked and why** (e.g. "Resuming run 'photo-dedupe-2026-07-09' — last seen 2026-07-09T10:42:00Z, most recent non-done run.").
 - If no non-done STATE.md exists at all, tell the user there is nothing to resume and stop.
 
 ## Step 2 — Read state and reconcile against git ground truth

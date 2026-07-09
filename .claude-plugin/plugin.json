@@ -1,6 +1,6 @@
 {
   "name": "lite",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Lightweight prototype-grade pipeline: Plan -> Build (TDD) -> Test -> Review -> PR. See PLAN.md and TASKS.md for design and pickup order.",
   "keywords": ["pipeline", "orchestration", "tdd", "prototype"]
 }
