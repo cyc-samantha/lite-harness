@@ -64,7 +64,7 @@ Spawn `qa-engineer` in the same worktree:
 
 Read the qa-engineer's verdict:
 - **`GAPS_CLOSED`** — record the fresh pass/fail counts in `STATE.md` (this is the test evidence for the PR body), set `phase: review`, proceed to Step 6.
-- **`GAPS_FOUND`** — append the findings to `STATE.md` § Open findings. This consumes one fix loop (see the shared cap below). Spawn `software-engineer` again (agent 4/5, the "+1 fix loop") with the findings and plan.md, addressing each finding. Re-run qa-engineer's suite check is not required a second time in the happy-path budget — trust the software-engineer's own fresh-verification self-review (its agent contract requires this) before moving to Review with the fix applied.
+- **`GAPS_FOUND`** — append the findings to `STATE.md` § Open findings. This consumes one fix loop (see the shared cap below): increment `STATE.md`'s `review_loops` frontmatter field by 1 before spawning the fix, exactly as Step 6 does for its own loop — this is the same shared counter across Steps 5 and 6, not a separate one. Spawn `software-engineer` again (agent 4/5, the "+1 fix loop") with the findings and plan.md, addressing each finding. Re-run qa-engineer's suite check is not required a second time in the happy-path budget — trust the software-engineer's own fresh-verification self-review (its agent contract requires this) before moving to Review with the fix applied.
 
 ## Step 6 — Review (spawn: code-reviewer, agent 4/5 or 5/5)
 
@@ -82,10 +82,10 @@ This means the happy-path spawn count is: planner (1) + software-engineer build 
 
 ## Step 7 — PR
 
-From the worktree, open (never merge) a pull request:
+From the worktree, open (never merge) a pull request. The `cd "<worktree-path>" &&` prefix below is REQUIRED, not optional style — `hooks/main-branch-guard.sh` blocks any bare `gh pr create` with `exit 2` (Iron Law 4) and only accepts it as a single Bash invocation carrying a recognized delegation prefix (`cd <path> &&`, `git -C <path>`, or `git --git-dir=<path>`):
 
 ```
-gh pr create --base <default-branch> --head lite/<slug> --title "<idea, one line>" --body "<body below>"
+cd "<worktree-path>" && gh pr create --base <default-branch> --head lite/<slug> --title "<idea, one line>" --body "<body below>"
 ```
 
 PR body must include, freshly composed from this run (not copy-pasted from an earlier draft):
