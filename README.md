@@ -1,35 +1,38 @@
 # lite-harness
 
-Lightweight Claude Code plugin: `/lite:build` runs a defined idea through Plan → Build (TDD) → Test → Review → PR — good-practice code quality, prototype-grade ceremony. It is a companion to, not a replacement for, the full production harness; it intentionally omits intake fingerprinting, Best-of-N/PDR-RTV build variants, the Final Gate quartet, deploy, and the continuous-learning loop (see `PLAN.md` §2 for what was cut and why).
+Lightweight Claude Code harness: `/lite:build` runs a defined idea through Plan → Build (TDD) → Test → Review → PR — good-practice code quality, prototype-grade ceremony. It is a companion to, not a replacement for, the full production harness, and it installs the same way — clone into `~/.claude`, run `setup.sh` — not via the plugin marketplace. It intentionally omits intake fingerprinting, Best-of-N/PDR-RTV build variants, the Final Gate quartet, deploy, and the continuous-learning loop (see `PLAN.md` §2 for what was cut and why).
 
 **Status: L1-L6 landed; L7 (E2E validation) in progress.** See `TASKS.md` for per-task status and `PLAN.md` for the full design.
 
 ## Prerequisites
 
-- **Claude Code** with plugin support.
+- **Claude Code** (no plugin marketplace enrollment needed — see Install below).
 - **`jq`** — the hooks parse tool-call JSON with it. Without `jq` the guards degrade to no-ops.
 - **`gh`**, authenticated (`gh auth status`) — the final `/lite:build` step opens a PR.
 - **`bats`** — only needed to run this repo's test suite (`bats tests/shell/`), not to use the plugin.
 
 ## Install
 
-The plugin is distributed as a Claude Code marketplace whose manifest is `.claude-plugin/marketplace.json` (marketplace name `lite-harness`, plugin name `lite`).
+Not distributed via the Claude Code plugin marketplace. Install it the same way as the full production harness: clone straight into your Claude config dir and run the idempotent bootstrap.
 
-From a local clone:
+```bash
+# 1. Clone into your Claude config dir
+git clone <repo> ~/.claude
 
+# 2. Run the idempotent bootstrap (installs missing tools, chmods hooks, validates settings.json)
+bash ~/.claude/setup.sh        # macOS
+# On Linux / Claude Code Cloud, provision tools first:
+bash ~/.claude/scripts/install-tools.sh --yes && bash ~/.claude/setup.sh
+
+# 3. Start Claude Code in any repo and run:
+> /lite:build "<a small, well-defined idea>"
 ```
-/plugin marketplace add /absolute/path/to/lite-harness
-/plugin install lite@lite-harness
-```
 
-Or straight from the git URL:
+`settings.json` at the repo root wires the four hooks directly (`hooks/hooks.json` is kept in sync as the plugin-manifest form, for anyone who does prefer to install this repo as a marketplace plugin instead — both forms point at the same hook scripts). The `/lite:` namespace comes from `.claude-plugin/plugin.json`'s `name: "lite"`, which Claude Code honors whether the repo got there via `git clone` or `/plugin install`.
 
-```
-/plugin marketplace add https://github.com/<owner>/lite-harness
-/plugin install lite@lite-harness
-```
+If you already run the heavy harness as your `~/.claude`, don't clone lite-harness on top of it — the two are meant to coexist as separate installs (see `PLAN.md` §7), so add lite-harness as a marketplace plugin in that case, or point `CLAUDE_CONFIG_DIR` at a second config dir for lite-only projects.
 
-Enablement is per-project: enable the `lite` plugin in each project where you want the `/lite:` commands and the run-scoped guards active. The guards (`orchestrator-guard`, `main-branch-guard`) only enforce while a `/lite:build` run is in flight, so enabling the plugin does not interfere with ordinary interactive work; set `LITE_GUARDS=off` in the environment to force-disable them regardless of run state.
+Guards (`orchestrator-guard`, `main-branch-guard`) only enforce while a `/lite:build` run is in flight, so installing does not interfere with ordinary interactive work; set `LITE_GUARDS=off` in the environment to force-disable them regardless of run state.
 
 ## Usage
 
@@ -51,12 +54,13 @@ ${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/<slug>/STAT
 
 ## Uninstall
 
-```
-/plugin uninstall lite@lite-harness
-/plugin marketplace remove lite-harness
+```bash
+rm -rf ~/.claude
 ```
 
-Removing the plugin does not delete run state under `.../lite/runs/`; delete that directory manually if you want a clean slate.
+(Or, if you installed it as a marketplace plugin instead: `/plugin uninstall lite@lite-harness && /plugin marketplace remove lite-harness`.)
+
+Either way, run state under `.../lite/runs/` is not deleted by removing the harness itself; delete that directory manually if you want a clean slate.
 
 ## Running the tests
 

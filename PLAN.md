@@ -8,20 +8,24 @@
 
 ---
 
-## 1. Delivery mechanism: a Claude Code plugin in a new repo
+## 1. Delivery mechanism: a self-contained Claude Code config dir, cloned directly (not the plugin marketplace)
 
-Ship the lite harness as a **Claude Code plugin** (this repo, `lite-harness`). Rationale:
+Ship the lite harness as its own repo (this repo, `lite-harness`), structured exactly like the heavy harness at `~/.claude`: `agents/`, `skills/`, `hooks/`, `rules/`, `templates/`, a root `settings.json`, and a `setup.sh` bootstrap — not installed through `/plugin marketplace add` + `/plugin install`. Rationale:
 
-- Plugins bundle `agents/`, `skills/`, `hooks/`, `commands/` and are **namespaced** (`/lite:build`), so nothing collides with the installed heavy harness in `~/.claude`.
-- Install/uninstall is one command; the heavy harness repo stays untouched.
-- Per-project opt-in is possible (enable the plugin only in prototype repos).
+- Matches the install muscle memory the heavy harness already uses (`git clone <repo> ~/.claude && bash ~/.claude/setup.sh`); one mental model for both harnesses.
+- `.claude-plugin/plugin.json` is still present (gives the **namespaced** `/lite:build` commands, same mechanism heavy uses for `/harness:*`), but is no longer the primary distribution path — `hooks/hooks.json` (plugin-manifest form) and root `settings.json` (direct-clone form) are kept in sync so either install method works, mirroring how the heavy harness ships both.
+- Per-project opt-in is still possible by pointing `CLAUDE_CONFIG_DIR` at a lite-only config dir, or by installing it as a marketplace plugin in a project that already runs the heavy harness as its `~/.claude` (see §7).
 
 ### Repo layout
 
 ```
 lite-harness/
 ├── .claude-plugin/
-│   └── plugin.json            # name: "lite", version, description
+│   └── plugin.json            # name: "lite" — gives the /lite: namespace either install path
+├── settings.json               # direct-clone hook wiring (mirrors heavy's root settings.json)
+├── setup.sh                    # idempotent bootstrap: tool check, chmod hooks, validate settings.json
+├── scripts/
+│   └── install-tools.sh       # Linux/Cloud tool provisioning (jq, gh, bats) — see §7
 ├── agents/
 │   ├── planner.md             # trimmed from heavy architect.md
 │   ├── software-engineer.md   # trimmed from heavy software-engineer.md
@@ -32,7 +36,8 @@ lite-harness/
 │   ├── resume/SKILL.md        # /lite:resume — continue after usage-limit / crash
 │   └── status/SKILL.md        # /lite:status — show run state, phase, open tasks
 ├── hooks/
-│   ├── hooks.json             # ≤ 6 hook registrations (vs ~90 in heavy)
+│   ├── hooks.json             # plugin-manifest form of the same ≤6 hook registrations (vs ~90 in heavy)
+│   ├── _lib/lite-paths.sh     # HARNESS_ROOT/HARNESS_DATA-style path resolver (see §5)
 │   ├── main-branch-guard.sh   # copied from heavy harness (Iron Law 4)
 │   ├── orchestrator-guard.sh  # trimmed orchestrator-discipline.sh (Iron Law 3)
 │   ├── state-checkpoint.sh    # Stop/SubagentStop hook — writes run state (memory/resume)
@@ -190,13 +195,16 @@ Token budget target: **≤ 5 agent spawns on the happy path** (planner, SE, QE, 
 ## 7. Install & usage (goes in README.md)
 
 ```bash
-# one-time
-git clone <this-repo-url> ~/git/lite-harness
-claude
-> /plugin marketplace add ~/git/lite-harness
-> /plugin install lite@lite-harness
+# 1. Clone into your Claude config dir
+git clone <this-repo-url> ~/.claude
 
-# per idea, from the target project repo:
+# 2. Run the idempotent bootstrap (installs missing tools, chmods hooks, validates settings.json)
+bash ~/.claude/setup.sh        # macOS
+# On Linux / Claude Code Cloud, provision tools first:
+bash ~/.claude/scripts/install-tools.sh --yes && bash ~/.claude/setup.sh
+
+# 3. Start Claude Code in any repo and describe what you want to build:
+claude
 > /lite:build "CLI tool that dedupes photos by perceptual hash, with a dry-run mode"
 
 # after usage limit resets / new session:
@@ -204,7 +212,7 @@ claude
 > /lite:status            # where am I?
 ```
 
-Both harnesses coexist: heavy stays global in `~/.claude`; heavy hooks (main-branch-guard etc.) firing during lite runs is harmless — lite obeys the same worktree discipline, so no conflicts. If you want lite-only projects, disable heavy per-project via project settings.
+This is a direct clone into `~/.claude`, the same install pattern as the heavy harness — no `/plugin marketplace add` / `/plugin install` step. `.claude-plugin/plugin.json` still ships (so `/lite:` namespacing works either way) for anyone who *does* want to run lite-harness as a marketplace plugin instead — e.g. a project that already runs the heavy harness as its `~/.claude` and wants `/lite:build` available per-project without replacing that install. In that case: `/plugin marketplace add ~/git/lite-harness && /plugin install lite@lite-harness`, and heavy hooks (main-branch-guard etc.) firing during lite runs is harmless — lite obeys the same worktree discipline, so no conflicts.
 
 ---
 
