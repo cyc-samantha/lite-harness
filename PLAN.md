@@ -198,9 +198,12 @@ Token budget target: **≤ 5 agent spawns on the happy path** (planner, SE, QE, 
 # 1. Clone into your Claude config dir
 git clone <this-repo-url> ~/.claude
 
-# 2. Run the idempotent bootstrap (installs missing tools, chmods hooks, validates settings.json)
-bash ~/.claude/setup.sh        # macOS
-# On Linux / Claude Code Cloud, provision tools first:
+# 2. Run the idempotent bootstrap (checks for required tools, chmods hooks, validates settings.json)
+bash ~/.claude/setup.sh
+# setup.sh only checks for jq/gh/bats and WARNs if any are missing — it does not
+# install them. On macOS, install any missing tools yourself first:
+brew install jq gh bats-core
+# On Linux / Claude Code Cloud, provision tools with the installer script instead:
 bash ~/.claude/scripts/install-tools.sh --yes && bash ~/.claude/setup.sh
 
 # 3. Start Claude Code in any repo and describe what you want to build:

@@ -66,6 +66,33 @@ _run_guard() {
   [ "$status" -eq 0 ]
 }
 
+# --- S2: delegation target must be a pinned .claude/worktrees/<slug> path ----
+
+@test "S2: git -C . checkout is blocked (REPO_ROOT masquerading as delegation)" {
+  run _run_guard 'git -C . checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "S2: cd <repo-root> && git checkout is blocked (non-worktree cd target)" {
+  run _run_guard 'cd /home/user/myrepo && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "S2: git --work-tree=/x checkout is blocked (intervening global flag hides forbidden command no more)" {
+  run _run_guard 'git --work-tree=/x checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "S2: git -C <worktree> checkout remains allowed" {
+  run _run_guard 'git -C /path/to/.claude/worktrees/wt checkout some-branch'
+  [ "$status" -eq 0 ]
+}
+
+@test "S2: cd \"\$WORKTREE\" && git merge remains allowed" {
+  run _run_guard 'cd "$WORKTREE" && git merge feature'
+  [ "$status" -eq 0 ]
+}
+
 # --- F6: run-scoped enforcement ----------------------------------------------
 
 @test "no active run → forbidden command is allowed (guard is dormant)" {

@@ -10,7 +10,7 @@ Reference: `PLAN.md`. Status reflects the readiness-review pass: L1-L6 landed, L
 | L4 | STATE.md + plan.md templates; run-state layout under `${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/` | software-engineer | Template fields match PLAN.md §5 exactly | Done |
 | L5 | `/lite:build` SKILL.md per PLAN.md §6 | software-engineer | Dry-run on a toy repo produces plan → PR with ≤5 spawns | Done |
 | L6 | `/lite:resume` + `/lite:status` + SessionStart notice | software-engineer | Kill session mid-build; resume completes the run from first unchecked task | Done |
-| L7 | E2E validation: run a real small idea end-to-end, kill at each phase boundary, resume each time | qa-engineer | All 5 kill-points resume correctly; PR opens; observation line written | In Progress |
+| L7 | E2E validation: run a real small idea end-to-end, kill at each phase boundary, resume each time | qa-engineer | All 5 kill-points resume correctly; PR opens; observation line written | Partially closed — `tests/shell/test_build_e2e_smoke.bats` (audit fix G4) covers the hook-wiring chain (STATE.md write, pinned worktree path, delegated `gh pr create`, checkpoint stamping) at smoke level with bats, since a live Claude Code session isn't available in this environment. A real multi-agent dry run with actual kill/resume at each of the 5 phase boundaries is still open and needs a live session to execute. |
 | L8 | Review pass on the whole plugin (diff-only) | code-reviewer | APPROVED | Not Started |
 
 ## Ordering

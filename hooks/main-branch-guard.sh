@@ -5,16 +5,20 @@
 #
 # Blocks bare HEAD-mutating commands: git checkout / switch / reset --hard /
 # merge / rebase, and gh pr create. A command is ALLOWED only when it carries
-# a recognized delegation prefix: `git -C <path> ...`, `git --git-dir=<path>
-# ...`, or a leading `cd <path> && ...`. Known limitation (shared with the
-# heavy harness's equivalent guard): this hook does not verify the delegation
-# target actually IS a worktree path — any non-empty `cd`/`-C`/`--git-dir`
-# target is accepted as valid delegation. Enforcing "targets a worktree" is a
-# separate, not-yet-built check.
+# a recognized delegation prefix — `git -C <path> ...`, `git --git-dir=<path>
+# ...`, or a leading `cd <path> && ...` — AND the delegation target is a
+# pinned worktree: it must contain `.claude/worktrees/` (the convention pinned
+# by `skills/build/SKILL.md` Step 2), or be an unresolved shell variable
+# reference (e.g. `"$WORKTREE"`) matching the orchestrator's own delegation
+# convention. `.`, an empty target, and REPO_ROOT itself never contain that
+# substring, so they are rejected as delegation targets (S2). Intervening git
+# global flags (e.g. `--work-tree=<path>`) between `git` and the subcommand no
+# longer hide a forbidden command from detection.
 #
 # Iron Law 8 (fail-closed): a forbidden command whose delegation target cannot
-# be evaluated (empty `cd` target) is BLOCKED, never silently allowed. Reverting
-# the final `exit 2` makes the block tests go RED.
+# be evaluated (empty `cd` target, or a target that isn't a worktree path) is
+# BLOCKED, never silently allowed. Reverting the final `exit 2` makes the
+# block tests go RED.
 #
 # Reads Claude Code PreToolUse JSON from stdin: {tool_name, tool_input.command}.
 #
@@ -41,10 +45,16 @@ COMMAND="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/nu
 [[ "$TOOL_NAME" != "Bash" ]] && exit 0
 [[ -z "$COMMAND" ]] && exit 0
 
+# Zero or more intervening `git` global flag tokens between `git` and its
+# subcommand — either single tokens (`--work-tree=<path>`) or a flag plus its
+# own value token (`-C <path>`) — so a flagged invocation doesn't hide a
+# forbidden subcommand from these regexes.
+_GIT_FLAGS='([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*'
+
 is_forbidden_command() {
   local cmd="$1"
-  [[ "$cmd" =~ (^|[^[:alnum:]_-])git[[:space:]]+(checkout|switch|merge|rebase)([[:space:]]|$) ]] && return 0
-  [[ "$cmd" =~ (^|[^[:alnum:]_-])git[[:space:]]+reset[[:space:]] ]] && [[ "$cmd" =~ --hard ]] && return 0
+  [[ "$cmd" =~ (^|[^[:alnum:]_-])git${_GIT_FLAGS}[[:space:]]+(checkout|switch|merge|rebase)([[:space:]]|$) ]] && return 0
+  [[ "$cmd" =~ (^|[^[:alnum:]_-])git${_GIT_FLAGS}[[:space:]]+reset[[:space:]] ]] && [[ "$cmd" =~ --hard ]] && return 0
   [[ "$cmd" =~ (^|[^[:alnum:]_-])gh[[:space:]]+pr[[:space:]]+create([[:space:]]|$) ]] && return 0
   return 1
 }
@@ -58,13 +68,42 @@ cd_delegation_target() {
   [[ "$unquoted" != "$cmd" ]] && printf '%s' "$unquoted"
 }
 
+# The dequoted target following a `-C ` or `--git-dir=` flag anywhere in $cmd.
+# Empty when the flag is absent.
+_flag_target() {
+  local cmd="$1" flag_pattern="$2" quoted unquoted
+  quoted="$(printf '%s' "$cmd" | sed -E "s#.*${flag_pattern}['\"]([^'\"]*)['\"].*#\1#")"
+  [[ "$quoted" != "$cmd" ]] && { printf '%s' "$quoted"; return; }
+  unquoted="$(printf '%s' "$cmd" | sed -E "s#.*${flag_pattern}([^[:space:]]+).*#\1#")"
+  [[ "$unquoted" != "$cmd" ]] && printf '%s' "$unquoted"
+}
+
+# S2: a delegation target is only valid when it's the pinned worktree
+# convention (`.claude/worktrees/<slug>`, skills/build/SKILL.md Step 2) or an
+# unresolved shell variable reference (e.g. `$WORKTREE`, `${WORKTREE}`) — the
+# orchestrator's own delegation idiom, which this hook cannot resolve to a
+# literal path. `.`, empty, and REPO_ROOT itself never satisfy either check.
+_is_worktree_delegation_target() {
+  local target="$1"
+  [[ -z "$target" ]] && return 1
+  [[ "$target" == *".claude/worktrees/"* ]] && return 0
+  [[ "$target" =~ ^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$ ]] && return 0
+  return 1
+}
+
 has_valid_delegation() {
-  local cmd="$1"
-  [[ "$cmd" =~ git[[:space:]]+-C[[:space:]]+[^[:space:]] ]] && return 0
-  [[ "$cmd" =~ git[[:space:]]+--git-dir=[^[:space:]] ]] && return 0
+  local cmd="$1" target
+
+  target="$(_flag_target "$cmd" '-C[[:space:]]+')"
+  _is_worktree_delegation_target "$target" && return 0
+
+  target="$(_flag_target "$cmd" '--git-dir=')"
+  _is_worktree_delegation_target "$target" && return 0
+
   if [[ "$cmd" =~ ^[[:space:]]*\(?[[:space:]]*cd[[:space:]] ]]; then
-    # Fail-closed: an empty cd target is not evaluable delegation → not valid.
-    [[ -n "$(cd_delegation_target "$cmd")" ]] && return 0
+    target="$(cd_delegation_target "$cmd")"
+    # Fail-closed: an empty/non-worktree cd target is not valid delegation.
+    _is_worktree_delegation_target "$target" && return 0
   fi
   return 1
 }
