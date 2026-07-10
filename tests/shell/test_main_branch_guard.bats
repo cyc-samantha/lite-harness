@@ -93,6 +93,48 @@ _run_guard() {
   [ "$status" -eq 0 ]
 }
 
+# --- Fix-cycle: narrow $WORKTREE-only variable allowance, per-clause scoping -
+
+@test "exploit: cd \$PWD && git checkout main is blocked (bare var allowance too broad)" {
+  run _run_guard 'cd "$PWD" && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: cd \$HOME && git checkout main is blocked (bare var allowance too broad)" {
+  run _run_guard 'cd "$HOME" && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: git -C \$PWD checkout main is blocked (bare var allowance too broad)" {
+  run _run_guard 'git -C "$PWD" checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: cd \$OLDPWD && git reset --hard is blocked (bare var allowance too broad)" {
+  run _run_guard 'cd "$OLDPWD" && git reset --hard HEAD~1'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: git checkout main && git -C <worktree> status is blocked (delegation not scoped to forbidden clause)" {
+  run _run_guard 'git checkout main && git -C /x/.claude/worktrees/y status'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: git checkout main; echo -C <worktree> is blocked (non-git -C token laundering)" {
+  run _run_guard 'git checkout main; echo -C /any/.claude/worktrees/z'
+  [ "$status" -eq 2 ]
+}
+
+@test "regression: git --git-dir=\"\$WORKTREE/.git\" checkout remains allowed (variable-plus-subpath)" {
+  run _run_guard 'git --git-dir="$WORKTREE/.git" checkout main'
+  [ "$status" -eq 0 ]
+}
+
+@test "low-priority: path-traversal escape out of pinned worktree dir is blocked" {
+  run _run_guard 'cd "/x/.claude/worktrees/../../etc" && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
 # --- F6: run-scoped enforcement ----------------------------------------------
 
 @test "no active run → forbidden command is allowed (guard is dormant)" {

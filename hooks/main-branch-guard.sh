@@ -4,16 +4,23 @@
 # worktree delegation. Trimmed port of the heavy harness main-branch-guard.
 #
 # Blocks bare HEAD-mutating commands: git checkout / switch / reset --hard /
-# merge / rebase, and gh pr create. A command is ALLOWED only when it carries
-# a recognized delegation prefix — `git -C <path> ...`, `git --git-dir=<path>
-# ...`, or a leading `cd <path> && ...` — AND the delegation target is a
-# pinned worktree: it must contain `.claude/worktrees/` (the convention pinned
-# by `skills/build/SKILL.md` Step 2), or be an unresolved shell variable
-# reference (e.g. `"$WORKTREE"`) matching the orchestrator's own delegation
-# convention. `.`, an empty target, and REPO_ROOT itself never contain that
-# substring, so they are rejected as delegation targets (S2). Intervening git
-# global flags (e.g. `--work-tree=<path>`) between `git` and the subcommand no
-# longer hide a forbidden command from detection.
+# merge / rebase, and gh pr create. A command is ALLOWED only when EVERY
+# clause (split on `&&`/`||`/`;`/`|`) carrying a forbidden subcommand also
+# carries its OWN recognized delegation, scoped to that clause's own `git`
+# invocation — `git -C <path> ...`, `git --git-dir=<path> ...` — or the
+# command's leading clause is `cd <path> && ...` (cd persists for every later
+# clause in the same shell invocation, matching the documented idiom). The
+# delegation target must be a pinned worktree: it must contain
+# `.claude/worktrees/` (the convention pinned by `skills/build/SKILL.md` Step
+# 2), or be exactly the orchestrator's documented `$WORKTREE`/`${WORKTREE}`
+# variable (optionally with a trailing subpath, e.g. `$WORKTREE/.git`) — no
+# other bare shell variable (`$PWD`, `$HOME`, `$OLDPWD`, etc.) qualifies, and
+# a target with a `/..` traversal component is rejected outright. `.`, an
+# empty target, and REPO_ROOT itself never satisfy any of these checks (S2).
+# A delegation token appearing elsewhere in the command — on an unrelated
+# clause, or attached to a non-git token — does not launder a bare forbidden
+# clause. Intervening git global flags (e.g. `--work-tree=<path>`) between
+# `git` and the subcommand no longer hide a forbidden command from detection.
 #
 # Iron Law 8 (fail-closed): a forbidden command whose delegation target cannot
 # be evaluated (empty `cd` target, or a target that isn't a worktree path) is
@@ -78,34 +85,91 @@ _flag_target() {
   [[ "$unquoted" != "$cmd" ]] && printf '%s' "$unquoted"
 }
 
-# S2: a delegation target is only valid when it's the pinned worktree
-# convention (`.claude/worktrees/<slug>`, skills/build/SKILL.md Step 2) or an
-# unresolved shell variable reference (e.g. `$WORKTREE`, `${WORKTREE}`) — the
-# orchestrator's own delegation idiom, which this hook cannot resolve to a
-# literal path. `.`, empty, and REPO_ROOT itself never satisfy either check.
+# S2 (fix-cycle round 2): a delegation target is only valid when it's the
+# pinned worktree convention (`.claude/worktrees/<slug>`, skills/build/SKILL.md
+# Step 2), or the orchestrator's OWN documented delegation variable `$WORKTREE`
+# / `${WORKTREE}` (optionally with a trailing subpath, e.g. `$WORKTREE/.git`
+# for the `git --git-dir=` idiom) — never any other bare shell variable such as
+# `$PWD`/`$HOME`/`$OLDPWD`, all of which resolve to REPO_ROOT or an
+# orchestrator-adjacent directory in practice and were previously accepted by
+# a too-broad "any identifier" regex (code-review + security-review finding,
+# round 2). A target containing a `/..` traversal component is rejected
+# outright even if it also contains the `.claude/worktrees/` substring — a
+# substring match earlier in the path is not proof the resolved path stays
+# inside it once `..` segments walk back out. `.`, empty, and REPO_ROOT itself
+# never satisfy any of these checks.
 _is_worktree_delegation_target() {
   local target="$1"
   [[ -z "$target" ]] && return 1
+  [[ "$target" == *"/.."* || "$target" == "../"* || "$target" == ".." ]] && return 1
   [[ "$target" == *".claude/worktrees/"* ]] && return 0
-  [[ "$target" =~ ^\$\{?[A-Za-z_][A-Za-z0-9_]*\}?$ ]] && return 0
+  [[ "$target" =~ ^\$\{?WORKTREE\}?(/.*)?$ ]] && return 0
   return 1
 }
 
+# Split a command string into clauses on `&&`, `||`, `;`, `|`. Naive text
+# split (no quote-awareness) — sufficient for the compound delegation idioms
+# this guard cares about; none of the legitimate or forbidden forms embed
+# these operators inside quoted path segments.
+_split_clauses() {
+  printf '%s\n' "$1" | sed -E 's/\|\||&&|;|\|/\n/g'
+}
+
+# The portion of $clause starting at its own `git` command word (word-
+# bounded, not a substring match inside another token) through the end of
+# the clause. Empty/failure when the clause has no `git` invocation of its
+# own — this is what anchors -C/--git-dir extraction to an actual git
+# invocation instead of any occurrence anywhere in the command (e.g. an
+# argument to `echo`).
+_git_segment() {
+  local clause="$1"
+  [[ "$clause" =~ (^|[^[:alnum:]_-])git([[:space:]].*)?$ ]] || return 1
+  printf '%s' "${BASH_REMATCH[2]}"
+}
+
+# Whether $clause carries its OWN -C/--git-dir delegation, scoped to that
+# clause's own git invocation. Does not consider cd or other clauses.
+_clause_has_own_delegation() {
+  local clause="$1" segment target
+  segment="$(_git_segment "$clause")" || return 1
+
+  target="$(_flag_target "$segment" '-C[[:space:]]+')"
+  _is_worktree_delegation_target "$target" && return 0
+
+  target="$(_flag_target "$segment" '--git-dir=')"
+  _is_worktree_delegation_target "$target" && return 0
+
+  return 1
+}
+
+# S2 finding 2 (round 2): delegation must be scoped to the forbidden clause
+# itself, not merely present anywhere in the full command string — otherwise
+# a bare forbidden clause can ride along on an unrelated delegated (or even
+# non-git) token elsewhere in the same command (e.g. `git checkout main &&
+# git -C <worktree> status`, or `git checkout main; echo -C <worktree>`).
+#
+# A leading `cd <target> && ...` / `cd <target>; ...` is the one case where
+# delegation legitimately covers every later clause, because `cd` persists
+# for the remainder of the shell invocation — but ONLY when it is the very
+# first clause of the command, matching the documented `cd "$WORKTREE" &&
+# git ...` idiom. Every other forbidden clause must carry its own -C/
+# --git-dir delegation.
 has_valid_delegation() {
-  local cmd="$1" target
-
-  target="$(_flag_target "$cmd" '-C[[:space:]]+')"
-  _is_worktree_delegation_target "$target" && return 0
-
-  target="$(_flag_target "$cmd" '--git-dir=')"
-  _is_worktree_delegation_target "$target" && return 0
+  local cmd="$1" leading_cd_target clause
 
   if [[ "$cmd" =~ ^[[:space:]]*\(?[[:space:]]*cd[[:space:]] ]]; then
-    target="$(cd_delegation_target "$cmd")"
-    # Fail-closed: an empty/non-worktree cd target is not valid delegation.
-    _is_worktree_delegation_target "$target" && return 0
+    leading_cd_target="$(cd_delegation_target "$cmd")"
+    # Fail-closed: an empty/non-worktree leading cd target is not valid
+    # delegation — fall through to the per-clause check below.
+    _is_worktree_delegation_target "$leading_cd_target" && return 0
   fi
-  return 1
+
+  while IFS= read -r clause; do
+    is_forbidden_command "$clause" || continue
+    _clause_has_own_delegation "$clause" || return 1
+  done < <(_split_clauses "$cmd")
+
+  return 0
 }
 
 is_forbidden_command "$COMMAND" || exit 0
