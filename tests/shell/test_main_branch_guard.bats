@@ -169,3 +169,40 @@ _run_guard() {
   LITE_GUARDS=off run _run_guard 'git checkout some-branch'
   [ "$status" -eq 0 ]
 }
+
+# --- Fix-cycle round 4: subshell-scoped cd must not leak ambient_ok outward -
+
+@test "exploit: ( cd \"\$WORKTREE\" ) && git checkout main is blocked (subshell cd doesn't persist to parent shell)" {
+  run _run_guard '( cd "$WORKTREE" ) && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: ( cd \"\$WORKTREE\" && git status ) && git checkout main is blocked (subshell cd doesn't persist to parent shell)" {
+  run _run_guard '( cd "$WORKTREE" && git status ) && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: ( cd \"\$WORKTREE\" ) && git switch main is blocked (subshell cd doesn't persist to parent shell)" {
+  run _run_guard '( cd "$WORKTREE" ) && git switch main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: ( cd \"\$WORKTREE\" && echo hi ); git checkout main is blocked (subshell cd doesn't persist to parent shell)" {
+  run _run_guard '( cd "$WORKTREE" && echo hi ); git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "regression: ( cd \"\$WORKTREE\" && git checkout main ) remains allowed (forbidden command inside same subshell as its own cd)" {
+  run _run_guard '( cd "$WORKTREE" && git checkout main )'
+  [ "$status" -eq 0 ]
+}
+
+@test "regression: cd \"\$WORKTREE\" && git checkout main (plain persistent cd, no subshell) remains allowed" {
+  run _run_guard 'cd "$WORKTREE" && git checkout main'
+  [ "$status" -eq 0 ]
+}
+
+@test "regression: git -C \"\$WORKTREE\" checkout main remains allowed (per-clause delegation, unaffected)" {
+  run _run_guard 'git -C "$WORKTREE" checkout main'
+  [ "$status" -eq 0 ]
+}

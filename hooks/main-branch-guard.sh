@@ -161,10 +161,45 @@ _clause_has_own_delegation() {
 # `ambient_ok` is currently true OR it carries its own -C/--git-dir
 # delegation (`_clause_has_own_delegation`). Non-cd, non-forbidden clauses
 # (e.g. `git status`) leave `ambient_ok` untouched.
+#
+# Fix-cycle round 4: a `cd` inside a `( ... )` subshell does NOT persist to
+# the parent shell (standard bash semantics) — `( cd "$WORKTREE" ) && git
+# checkout main` must stay BLOCKED even though the cd's own target is valid,
+# because by the time `git checkout` runs the parent shell's cwd was never
+# changed. Model: each unmatched `(` opens a nested ambient-scope and each
+# `)` closes it, tracked with an explicit stack (`ambient_stack`). Per
+# clause, in order: (1) for every `(` in the clause, push the CURRENT
+# `ambient_ok` (the outer scope's value) before evaluating the clause's own
+# cd/forbidden logic, so a `cd` inside the new scope only mutates the
+# nested copy; (2) evaluate the clause's own cd-target or forbidden-command
+# logic as before; (3) for every `)` in the clause, pop the stack and
+# restore `ambient_ok` to exactly what it was immediately before the
+# matching `(` — this is what stops a subshell-scoped cd from leaking
+# outward once its subshell closes. A forbidden clause is evaluated against
+# whatever `ambient_ok` is in effect after step (1) for its own clause,
+# which correctly reflects nesting depth at that point in the sequence.
+# Clauses with no parens are a no-op push/pop (depth 0 throughout), so the
+# plain persistent-`cd` idiom and per-clause `-C`/`--git-dir` delegation are
+# unaffected.
+_count_char() {
+  local s="$1" c="$2" stripped
+  stripped="$(printf '%s' "$s" | tr -cd "$c")"
+  printf '%s' "${#stripped}"
+}
+
 has_valid_delegation() {
   local cmd="$1" clause cd_target ambient_ok=false
+  local -a ambient_stack=()
+  local opens closes i
 
   while IFS= read -r clause; do
+    opens="$(_count_char "$clause" '(')"
+    closes="$(_count_char "$clause" ')')"
+
+    for ((i = 0; i < opens; i++)); do
+      ambient_stack+=("$ambient_ok")
+    done
+
     if [[ "$clause" =~ ^[[:space:]]*\(?[[:space:]]*cd[[:space:]] ]]; then
       cd_target="$(cd_delegation_target "$clause")"
       if _is_worktree_delegation_target "$cd_target"; then
@@ -172,12 +207,18 @@ has_valid_delegation() {
       else
         ambient_ok=false
       fi
-      continue
+    elif is_forbidden_command "$clause"; then
+      if [[ "$ambient_ok" != true ]] && ! _clause_has_own_delegation "$clause"; then
+        return 1
+      fi
     fi
 
-    is_forbidden_command "$clause" || continue
-    [[ "$ambient_ok" == true ]] && continue
-    _clause_has_own_delegation "$clause" || return 1
+    for ((i = 0; i < closes; i++)); do
+      if [[ ${#ambient_stack[@]} -gt 0 ]]; then
+        ambient_ok="${ambient_stack[-1]}"
+        unset 'ambient_stack[-1]'
+      fi
+    done
   done < <(_split_clauses "$cmd")
 
   return 0
