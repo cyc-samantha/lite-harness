@@ -137,6 +137,28 @@ _run_guard() {
 
 # --- F6: run-scoped enforcement ----------------------------------------------
 
+# --- Fix-cycle round 3: leading-cd ambient state must be re-checked on later cds -
+
+@test "exploit: cd \"\$WORKTREE\"; cd /repo && git checkout main is blocked (later cd resets ambient delegation)" {
+  run _run_guard 'cd "$WORKTREE"; cd /repo && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: cd \"\$WORKTREE\" && cd /repo && git checkout main is blocked (later cd resets ambient delegation)" {
+  run _run_guard 'cd "$WORKTREE" && cd /repo && git checkout main'
+  [ "$status" -eq 2 ]
+}
+
+@test "exploit: cd .claude/worktrees/x; cd /home/x && git reset --hard is blocked (later cd resets ambient delegation)" {
+  run _run_guard 'cd .claude/worktrees/x; cd /home/x && git reset --hard HEAD~1'
+  [ "$status" -eq 2 ]
+}
+
+@test "regression: cd \"\$WORKTREE\" && git status && git checkout feature remains allowed (ambient persists across non-cd clause)" {
+  run _run_guard 'cd "$WORKTREE" && git status && git checkout feature'
+  [ "$status" -eq 0 ]
+}
+
 @test "no active run → forbidden command is allowed (guard is dormant)" {
   rm -rf "$CLAUDE_PLUGIN_DATA/lite/runs"
   run _run_guard 'git checkout some-branch'

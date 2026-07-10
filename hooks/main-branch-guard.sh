@@ -7,10 +7,12 @@
 # merge / rebase, and gh pr create. A command is ALLOWED only when EVERY
 # clause (split on `&&`/`||`/`;`/`|`) carrying a forbidden subcommand also
 # carries its OWN recognized delegation, scoped to that clause's own `git`
-# invocation — `git -C <path> ...`, `git --git-dir=<path> ...` — or the
-# command's leading clause is `cd <path> && ...` (cd persists for every later
-# clause in the same shell invocation, matching the documented idiom). The
-# delegation target must be a pinned worktree: it must contain
+# invocation — `git -C <path> ...`, `git --git-dir=<path> ...` — or an earlier
+# `cd <path> && ...` / `cd <path>; ...` clause set the ambient directory to a
+# valid worktree (cd persists for the rest of the shell invocation, matching
+# the documented idiom), AND no SUBSEQUENT `cd` clause has since re-targeted
+# the ambient directory elsewhere. The delegation target must be a pinned
+# worktree: it must contain
 # `.claude/worktrees/` (the convention pinned by `skills/build/SKILL.md` Step
 # 2), or be exactly the orchestrator's documented `$WORKTREE`/`${WORKTREE}`
 # variable (optionally with a trailing subpath, e.g. `$WORKTREE/.git`) — no
@@ -148,24 +150,33 @@ _clause_has_own_delegation() {
 # non-git) token elsewhere in the same command (e.g. `git checkout main &&
 # git -C <worktree> status`, or `git checkout main; echo -C <worktree>`).
 #
-# A leading `cd <target> && ...` / `cd <target>; ...` is the one case where
-# delegation legitimately covers every later clause, because `cd` persists
-# for the remainder of the shell invocation — but ONLY when it is the very
-# first clause of the command, matching the documented `cd "$WORKTREE" &&
-# git ...` idiom. Every other forbidden clause must carry its own -C/
-# --git-dir delegation.
+# Fix-cycle round 3: `cd <target>` persists for the rest of the shell
+# invocation, so it legitimately delegates every LATER clause — but only
+# until a SUBSEQUENT `cd` changes the ambient directory again. A leading
+# `cd "$WORKTREE" && ...` therefore covers a later forbidden clause, but
+# `cd "$WORKTREE"; cd /repo && git checkout main` must not: the second `cd`
+# re-targets the shell outside the worktree before the forbidden command
+# runs. `ambient_ok` tracks the most recent `cd` clause's validity as the
+# loop walks clauses in order; a forbidden clause is allowed iff
+# `ambient_ok` is currently true OR it carries its own -C/--git-dir
+# delegation (`_clause_has_own_delegation`). Non-cd, non-forbidden clauses
+# (e.g. `git status`) leave `ambient_ok` untouched.
 has_valid_delegation() {
-  local cmd="$1" leading_cd_target clause
-
-  if [[ "$cmd" =~ ^[[:space:]]*\(?[[:space:]]*cd[[:space:]] ]]; then
-    leading_cd_target="$(cd_delegation_target "$cmd")"
-    # Fail-closed: an empty/non-worktree leading cd target is not valid
-    # delegation — fall through to the per-clause check below.
-    _is_worktree_delegation_target "$leading_cd_target" && return 0
-  fi
+  local cmd="$1" clause cd_target ambient_ok=false
 
   while IFS= read -r clause; do
+    if [[ "$clause" =~ ^[[:space:]]*\(?[[:space:]]*cd[[:space:]] ]]; then
+      cd_target="$(cd_delegation_target "$clause")"
+      if _is_worktree_delegation_target "$cd_target"; then
+        ambient_ok=true
+      else
+        ambient_ok=false
+      fi
+      continue
+    fi
+
     is_forbidden_command "$clause" || continue
+    [[ "$ambient_ok" == true ]] && continue
     _clause_has_own_delegation "$clause" || return 1
   done < <(_split_clauses "$cmd")
 
