@@ -13,7 +13,20 @@ Lightweight Claude Code harness: `/lite:build` runs a defined idea through Plan 
 
 ## Install
 
-Not distributed via the Claude Code plugin marketplace. Install it the same way as the full production harness: clone straight into your Claude config dir and run the idempotent bootstrap.
+There are two ways to install lite-harness.
+
+### 1. Plugin marketplace (recommended when you also run the heavy/production harness as your primary `~/.claude`)
+
+```
+/plugin marketplace add cyc-samantha/lite-harness
+/plugin install lite@lite-harness
+```
+
+Then start Claude Code in any project repo and run `/lite:build "<a small, well-defined idea>"`.
+
+### 2. Manual clone (for when lite-harness IS your only `~/.claude` install, e.g. a lite-only machine/config dir)
+
+Clone straight into your Claude config dir and run the idempotent bootstrap.
 
 ```bash
 # 1. Clone into your Claude config dir
@@ -31,7 +44,7 @@ bash ~/.claude/scripts/install-tools.sh --yes && bash ~/.claude/setup.sh
 > /lite:build "<a small, well-defined idea>"
 ```
 
-`settings.json` at the repo root wires the four hooks directly (`hooks/hooks.json` is kept in sync as the plugin-manifest form, for anyone who does prefer to install this repo as a marketplace plugin instead — both forms point at the same hook scripts). The `/lite:` namespace comes from `.claude-plugin/plugin.json`'s `name: "lite"`, which Claude Code honors whether the repo got there via `git clone` or `/plugin install`.
+`settings.json` at the repo root wires the four hooks directly for the manual-clone path; `hooks/hooks.json` is the equivalent plugin-manifest form used by the marketplace path. Both forms point at the same hook scripts, so the two install paths behave identically. The `/lite:` namespace comes from `.claude-plugin/plugin.json`'s `name: "lite"`, which Claude Code honors whether the repo got there via `git clone` or `/plugin install`.
 
 If you already run the heavy harness as your `~/.claude`, don't clone lite-harness on top of it — the two are meant to coexist as separate installs (see `PLAN.md` §7), so add lite-harness as a marketplace plugin in that case, or point `CLAUDE_CONFIG_DIR` at a second config dir for lite-only projects.
 

@@ -1,0 +1,18 @@
+{
+  "name": "lite-harness",
+  "owner": {
+    "name": "cyc-samantha"
+  },
+  "metadata": {
+    "description": "Marketplace for lite-harness: a lightweight Plan -> Build (TDD) -> Test -> Review -> PR pipeline, companion to the full production harness.",
+    "repository": "https://github.com/cyc-samantha/lite-harness"
+  },
+  "plugins": [
+    {
+      "name": "lite",
+      "source": "./",
+      "description": "Lightweight prototype-grade pipeline: /lite:build, /lite:resume, /lite:status. Plan -> Build (TDD) -> Test -> Review -> PR.",
+      "version": "0.2.0"
+    }
+  ]
+}
