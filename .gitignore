@@ -4,3 +4,6 @@
 .claude/agent-memory/
 .claude/pipeline-state/
 .claude/session-memory/
+# Session-id+pid lock files (e.g. scheduled_tasks.lock convention) — never
+# committed by accident.
+/.claude/*.lock

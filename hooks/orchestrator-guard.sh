@@ -30,6 +30,16 @@
 # a genuine software-engineer/qa-engineer write fall through to
 # is_protected_path and get blocked in its own worktree (Build dies on arrival).
 #
+# S3 (residual accepted risk): the JSON `.subagent_type` field is trusted
+# as-is, unvalidated — a caller that can shape the PreToolUse payload could
+# still claim any subagent_type there. The env-var fallback, however, IS
+# validated against the four known lite agents below, because
+# CLAUDE_SUBAGENT_TYPE is a plain process env var: any Bash-tool command run
+# by the orchestrator's own turn could export it, so an unvalidated non-empty
+# check would let an untrusted value grant full trust. Mitigated today only by
+# the fact that Bash-tool exports don't persist into hook subprocesses; the
+# allowlist check is defense in depth for the day that stops being true.
+#
 # RUN-SCOPED (F6): this is a usability guard, not an always-on control. It only
 # enforces while a lite run is in flight — outside a /lite:build run it would
 # just block ordinary interactive edits in every project the plugin is enabled
@@ -48,7 +58,17 @@ lite_has_active_run || exit 0
 INPUT="$(cat 2>/dev/null || true)"
 FILE_PATH="$(printf '%s' "$INPUT" | jq -r '.tool_input.file_path // empty' 2>/dev/null)"
 SUBAGENT_TYPE="$(printf '%s' "$INPUT" | jq -r '.subagent_type // empty' 2>/dev/null)"
-[[ -z "$SUBAGENT_TYPE" ]] && SUBAGENT_TYPE="${CLAUDE_SUBAGENT_TYPE:-}"
+
+# S3: the four known lite agents. An env-var fallback value outside this set
+# is untrusted and falls through to is_protected_path as an orchestrator write.
+_is_known_lite_agent() {
+  [[ "$1" =~ ^(planner|software-engineer|qa-engineer|code-reviewer)$ ]]
+}
+
+if [[ -z "$SUBAGENT_TYPE" ]]; then
+  env_subagent_type="${CLAUDE_SUBAGENT_TYPE:-}"
+  _is_known_lite_agent "$env_subagent_type" && SUBAGENT_TYPE="$env_subagent_type"
+fi
 
 # exit 0 = ALLOW (write here), exit 2 = BLOCK.
 is_protected_path() {

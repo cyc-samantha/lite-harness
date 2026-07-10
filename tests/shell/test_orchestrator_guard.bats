@@ -86,6 +86,18 @@ _run_guard() {
   [ "$status" -eq 2 ]
 }
 
+# --- S3: CLAUDE_SUBAGENT_TYPE env fallback must be a known lite agent -------
+
+@test "S3: unknown CLAUDE_SUBAGENT_TYPE does not bypass the guard on a tracked file" {
+  CLAUDE_SUBAGENT_TYPE="bogus" run _run_guard "$TMP_REPO/tracked.md" ""
+  [ "$status" -eq 2 ]
+}
+
+@test "S3: known CLAUDE_SUBAGENT_TYPE (software-engineer) via env fallback is allowed" {
+  CLAUDE_SUBAGENT_TYPE="software-engineer" run _run_guard "$TMP_REPO/tracked.md" ""
+  [ "$status" -eq 0 ]
+}
+
 # --- F6: run-scoped enforcement ----------------------------------------------
 
 @test "no active run → orchestrator write to a tracked file is allowed (guard is dormant)" {

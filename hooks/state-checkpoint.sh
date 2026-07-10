@@ -22,6 +22,11 @@
 # active run itself via the shared selector (hooks/_lib/lite-paths.sh) — the same
 # "non-done, prefer last_seen over created" logic session-notice.sh uses. Zero
 # runs → nothing to stamp → no-op (still fail-closed: never creates a file).
+#
+# KNOWN LIMITATION (G2): single active run assumed. The self-location above
+# picks the most-recently-active non-done run process-wide, not per-session —
+# with two concurrent /lite:build runs, a Stop from run A can cross-stamp run
+# B's STATE.md instead of its own.
 
 set -uo pipefail
 
