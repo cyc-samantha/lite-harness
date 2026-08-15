@@ -266,9 +266,12 @@ async function commandSubmit(runId: string): Promise<void> {
   const contract = await contractOf(config, runId);
   const ladder = await readArtifact<LadderResult>(config, runId, 'ladder.json');
   const source = ticketSystemSource({ baseUrl: config.sourceUrl });
-  await beat(source, runId);
 
+  // Before the lease, not after: submitting settles the run and releases the
+  // lease, so a replayed submit would otherwise be told its lease had lapsed and
+  // to claim the work again — which is how finished work gets done twice.
   if (hasReached(state, 'submitted')) fail('this run has already submitted its evidence');
+  await beat(source, runId);
   const evidence = evidenceFrom(contract, ladder);
   const verdict = await source.submit(runId, evidence);
   await saveState(config.dataDir, advanced(state, 'submitted', now()));
@@ -323,8 +326,10 @@ async function commandPr(runId: string, extra: string[]): Promise<void> {
   const url = extra[0] ?? fail('usage: pr <runId> <url>');
   const state = await loadRun(config, runId);
   const source = ticketSystemSource({ baseUrl: config.sourceUrl });
-  await beat(source, runId);
+  // Asked of the local record before the network, so the answer to "has this
+  // already happened" never depends on the run still being live.
   if (hasReached(state, 'pr_open')) fail(`this run already recorded a pull request: ${state.prUrl ?? 'url not stored'}`);
+  await beat(source, runId);
 
   const project = await projectConfig(config.targetRoot);
   const repo: Repo = { root: config.targetRoot, runner: shellRunner };
