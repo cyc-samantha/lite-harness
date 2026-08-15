@@ -1,11 +1,25 @@
 # Example declaration for harness-factory-map.
 #
-# Copy to `.harness/project.yaml` in that repository. It lives there, not here,
-# because it describes that codebase — it should be versioned, reviewed, and
-# rolled back alongside the code it describes, and a change to it should pass
-# that repository's own gates.
+# Copy this to `.harness/project.yaml` in that repository. It lives there, not
+# here, because it describes that codebase — it should be versioned, reviewed and
+# rolled back alongside the code it describes, and a change to it should have to
+# pass that repository's own gates.
 #
-# Every command below was run against the repository before being written down.
+# The engine knows nothing about this codebase beyond what is written here. A new
+# gate, a different test runner, a changed base branch: all of them are an edit to
+# this file, never a change to the harness.
+#
+# In that repository the npm project sits one directory down, inside
+# `harness-factory-map/`, while git's root is above it. Every command therefore
+# names the package explicitly with `npm --prefix` rather than changing directory
+# first, and `LITE_TARGET` points at the git root. That is not cosmetic:
+# preflight's environment check looks at the first word of each command to decide
+# whether it can run at all, and `cd` is a shell builtin that always exists — a
+# `cd … && …` gate would pass that check no matter what was on the other side of
+# the `&&`, which turns a real check into a decorative one.
+#
+# Every command below was run against that repository, in a fresh worktree with no
+# node_modules, before it was written down.
 
 version: 1
 
@@ -14,33 +28,41 @@ env:
   tmp: .harness/run/{run_id}
 
 gates:
-  # Cheapest first. Nothing below a red rung runs, so an expensive gate never
-  # pays for a failure the compiler would have caught in seconds.
+  # A run works in a fresh worktree, and node_modules is not tracked — without
+  # this every command below exits 127. Roughly seven seconds, and `ci` rather
+  # than `install` so the lockfile decides what gets installed, not the resolver.
+  - id: install
+    run: "npm --prefix harness-factory-map ci --no-audit --no-fund"
+
+  # Cheapest first. Nothing below a red rung runs, so an expensive gate never pays
+  # for a failure the compiler would have caught in seconds.
   - id: typecheck
-    run: "npx tsc --noEmit"
+    run: "npm --prefix harness-factory-map run typecheck"
 
   - id: lint
-    run: "npx eslint ."
+    run: "npm --prefix harness-factory-map run lint"
 
   # One expansion per executable_test criterion, with the file and test name the
-  # contract named. This is the rung that produces evidence.
+  # contract named. This is the rung that produces evidence: the exit code is the
+  # claim that a criterion holds, and no model is consulted about it.
+  # `{file}` is relative to the npm package, which is where the script runs.
   - id: target_test
-    run: "npx vitest run {file} -t {name}"
+    run: "npm --prefix harness-factory-map run test -- {file} -t {name}"
     per_criterion: true
 
-  # The regression net: the named tests can all pass while something else breaks.
+  # The regression net: every named test can pass while something else breaks.
   - id: full_suite
-    run: "npx vitest run"
+    run: "npm --prefix harness-factory-map run test"
 
-  # The build is a real gate here — `npm run generate` produces the map data the
-  # app is built from, so a change can typecheck and still fail to build.
+  # A real gate here rather than a formality — `build` runs `generate` first, so a
+  # change can typecheck cleanly and still fail to produce the map the app renders.
   - id: build
-    run: "npm run build"
+    run: "npm --prefix harness-factory-map run build"
 
 protected_paths:
   - ".github/**"
   - ".harness/**"
-  - "package-lock.json"
+  - "harness-factory-map/package-lock.json"
 
 pr:
   base: main

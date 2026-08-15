@@ -11,5 +11,8 @@
 # Node toolchain
 node_modules/
 
-# Per-run engine state (never committed)
-run/
+# Per-run engine state (never committed).
+# Anchored to the repository root: unanchored, `run/` matches a directory of that
+# name at any depth, which silently swallowed skills/run/ — the plugin's only
+# entry point — for the whole of its existence.
+/run/

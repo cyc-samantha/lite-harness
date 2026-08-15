@@ -10,14 +10,21 @@
 import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
-/** Ordered, so "has this run already got past X" is answerable. */
+/**
+ * Ordered, so "has this run already got past X" is answerable.
+ *
+ * Every phase here is written by something the engine watched happen — a claim
+ * returning, an admission passing, a ladder exiting zero, a pull request URL
+ * arriving. Implementing and reviewing are missing on purpose: a subagent does
+ * both, and the only available signal that either finished is the subagent saying
+ * so. A phase recorded on a model's account of itself would make the record look
+ * complete while meaning nothing, which is worse than not recording it.
+ */
 export const RUN_PHASES = [
   'claimed',
   'admitted',
   'packed',
-  'implemented',
   'gates_passed',
-  'reviewed',
   'pr_open',
   'submitted',
 ] as const;

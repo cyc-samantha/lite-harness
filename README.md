@@ -147,14 +147,30 @@ for working on this repository are in `CLAUDE.md`.
 
 ## Status
 
-Slice 1: one contract, one run, start to submitted.
+Slice 1 is done: one contract, one run, claim to `accepted`.
 
-Verified against real execution: admission refusals, the gate ladder including
-shell quoting, scope violations, evidence from exit codes, prompt assembly and
-the reviewer's isolation. The guards have shell tests but have not yet been
-exercised by a full run, and resume-after-crash is tested only at the unit level.
+A real sealed contract ran against [harness-factory-map][pilot], produced a pull
+request, and was adjudicated `accepted` by the work source. All eight admission
+checks passed against a real repository, all six gate rungs ran, and the test
+named by the acceptance criterion was confirmed red before the change and green
+after — so the evidence stands for something.
+
+The run found four defects that no unit test would have:
+
+- branch names were built from contract ids containing colons, which git refuses
+- a retried contract asked for the branch its previous attempt had created
+- `git status --porcelain`'s significant leading space was trimmed away, which
+  corrupted one path per run and reported it as a scope violation
+- a replayed `submit` blamed a lapsed lease instead of saying the work was done
+
+Each is fixed, with tests. The lease itself was validated the hard way: the pilot
+outlived its lease mid-run, the work source requeued the contract, and the next
+command refused rather than acting on work it no longer held.
 
 Not yet built: concurrent runs and the merge queue that would make them safe,
 risk-routed review, the failure decision table, and retry budgets — the last of
 which needs two separate caps, since retrying a red gate within a run and
-retrying the run itself fail for different reasons.
+retrying the run itself fail for different reasons. The run-level cap has to live
+here rather than upstream, which records attempts but does not limit them.
+
+[pilot]: https://github.com/cyc-samantha/harness-factory-map/pull/2

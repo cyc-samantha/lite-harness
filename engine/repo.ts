@@ -16,10 +16,14 @@ export interface Repo {
   runner: CommandRunner;
 }
 
-async function git(repo: Repo, args: string, cwd = repo.root): Promise<string> {
+async function gitRaw(repo: Repo, args: string, cwd = repo.root): Promise<string> {
   const result = await repo.runner.run(`git ${args}`, { cwd });
   if (result.exitCode !== 0) throw new Error(`git ${args} failed: ${result.output}`);
-  return result.output.trim();
+  return result.output;
+}
+
+async function git(repo: Repo, args: string, cwd = repo.root): Promise<string> {
+  return (await gitRaw(repo, args, cwd)).trim();
 }
 
 export async function trackedFiles(repo: Repo): Promise<string[]> {
@@ -47,6 +51,42 @@ export interface WorktreeRequest {
   base: string;
 }
 
+/** How much of a run id is enough to tell two attempts apart in a branch name. */
+const RUN_SUFFIX_LENGTH = 8;
+
+function slugify(value: string): string {
+  return value
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[-._]+|[-._]+$/g, '');
+}
+
+/**
+ * A branch name git will accept, unique to this run.
+ *
+ * Two things make the obvious `prefix + contractId` wrong. Contract ids are
+ * `<adapter>:<spec>:<slice>` by convention and a colon is not legal in a ref, so
+ * the branch cannot be created at all — a failure that lands after the work is
+ * already claimed upstream. And a contract that is retried would ask for a
+ * branch that already exists, so the second attempt either fails on a collision
+ * or silently continues the first attempt's work.
+ *
+ * The run id in the suffix is what makes the branch answerable afterwards: given
+ * a branch, the ledger says which attempt produced it.
+ *
+ * SAFETY: an id that survives sanitising as nothing is refused rather than
+ * quietly becoming a bare prefix, which would name the branch after no contract
+ * in particular.
+ */
+export function branchName(prefix: string, contractId: string, runId: string): string {
+  const slug = slugify(contractId);
+  if (!slug) throw new Error(`contract id has nothing a branch name can be built from: ${JSON.stringify(contractId)}`);
+  const suffix = slugify(runId).slice(0, RUN_SUFFIX_LENGTH);
+  if (!suffix) throw new Error(`run id has nothing a branch name can be built from: ${JSON.stringify(runId)}`);
+  return `${prefix}${slug}-${suffix}`;
+}
+
 export async function createWorktree(repo: Repo, request: WorktreeRequest): Promise<void> {
   await git(repo, `worktree add -b ${q(request.branch)} ${q(request.path)} ${q(request.base)}`);
 }
@@ -59,11 +99,25 @@ function q(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * The path in one `git status --porcelain` line.
+ *
+ * The first two columns are the index and worktree status and either may be a
+ * space, so the path starts at column three and the leading whitespace is
+ * significant — which is why this reads unmodified output rather than trimmed
+ * output. A rename is reported as `old -> new`; the run changed the new one.
+ */
+function porcelainPath(line: string): string {
+  const path = line.slice(3).trim();
+  const renamed = path.split(' -> ');
+  return (renamed.at(-1) ?? path).trim();
+}
+
 /** Paths the run has touched, committed or not, relative to the worktree. */
 export async function changedPaths(repo: Repo, worktree: string, base: string): Promise<string[]> {
   const committed = await git(repo, `diff --name-only ${q(base)}...HEAD`, worktree);
-  const pending = await git(repo, 'status --porcelain', worktree);
-  const working = pending.split('\n').map((line) => line.slice(3).trim());
+  const pending = await gitRaw(repo, 'status --porcelain', worktree);
+  const working = pending.split('\n').filter((line) => line.length > 3).map(porcelainPath);
   const all = [...committed.split('\n'), ...working].filter((path) => path.length > 0);
   return [...new Set(all)];
 }
