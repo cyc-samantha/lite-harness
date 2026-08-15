@@ -68,6 +68,11 @@ export async function changedPaths(repo: Repo, worktree: string, base: string): 
   return [...new Set(all)];
 }
 
+/** Everything this run changed, as a patch — committed work and working tree alike. */
+export async function diffAgainst(repo: Repo, worktree: string, base: string): Promise<string> {
+  return git(repo, `diff ${q(base)}`, worktree);
+}
+
 /**
  * Stages the named paths only. `git add -A` would sweep in whatever else is
  * sitting in the worktree — a stray credential file, a local scratch note — and

@@ -31,7 +31,7 @@ Then `/run <contract-id>`.
 |---|---|---|
 | `ports/` | The two interfaces the engine depends on | No implementation |
 | `adapters/` | One work source's wire format and quirks | The only place upstream types appear |
-| `engine/` | Admission, gates, evidence, scope, run record | Names no project, imports no adapter |
+| `engine/` | Admission, gates, evidence, scope, prompts, run record | Names no project, imports no adapter |
 | `bin/` | The composition root | The only file that knows both sides |
 | `roles/` | Three prompts | No repository facts |
 | `hooks/` | Four guards | Path-based, never role-based |
@@ -59,6 +59,19 @@ routed around until it means nothing.
 The rung that matters most runs the test the contract named for each criterion.
 Its exit code becomes that criterion's evidence, which is what takes the verdict
 out of the model's hands.
+
+## Prompts are assembled, never written
+
+Four slots, stablest first, because a cache reuses a prefix and stops at the
+first byte that differs: **project → contract → role → payload**. Putting the
+role first is the obvious arrangement and breaks the prefix at position one, so
+two roles in the same run share nothing.
+
+The payload type is the other half. A reviewer's payload carries a diff and has
+no field for the context pack, the repository, or how the implementation went —
+so its second reading stays independent by construction rather than by anyone
+remembering. `bin/lite.ts prompt <runId>:<role>` is the only supported way to
+build one.
 
 ## Staying light
 
