@@ -13,8 +13,8 @@
 # the documented idiom), AND no SUBSEQUENT `cd` clause has since re-targeted
 # the ambient directory elsewhere. The delegation target must be a pinned
 # worktree: it must contain
-# `.claude/worktrees/` (the convention pinned by `skills/build/SKILL.md` Step
-# 2), or be exactly the orchestrator's documented `$WORKTREE`/`${WORKTREE}`
+# `.claude/worktrees/`, lie inside this run's own `$LITE_WORKTREE`, or be
+# exactly the orchestrator's documented `$WORKTREE`/`${WORKTREE}`
 # variable (optionally with a trailing subpath, e.g. `$WORKTREE/.git`) — no
 # other bare shell variable (`$PWD`, `$HOME`, `$OLDPWD`, etc.) qualifies, and
 # a target with a `/..` traversal component is rejected outright. `.`, an
@@ -31,12 +31,16 @@
 #
 # Reads Claude Code PreToolUse JSON from stdin: {tool_name, tool_input.command}.
 #
-# RUN-SCOPED (F6): this is a usability guard, not an always-on control. It only
-# enforces while a lite run is in flight — outside a /lite:build run it would
-# just block ordinary interactive git in every project the plugin is enabled in.
-# `LITE_GUARDS=off` force-disables it regardless of run state. If run-state can't
-# be evaluated, lite_has_active_run reports "no active run" and we allow — the
-# fail-safe default for a usability guard (see lite-paths.sh for the rationale).
+# RUN-SCOPED: this is a usability guard, not an always-on control. It only
+# enforces while a run is in flight — outside a `/run` it would just block
+# ordinary interactive git in every project the plugin is enabled in. A run is in
+# flight exactly when the engine has exported `$LITE_WORKTREE`; unset means no
+# run, and we allow. `LITE_GUARDS=off` force-disables it regardless.
+#
+# That allow-on-unset is deliberate and is NOT a fail-closed violation: with no
+# run in flight there is no run-owned HEAD to protect, so there is no verdict to
+# fail closed on. Once a run IS in flight, every undecidable delegation target
+# blocks (Iron Law 8, above).
 
 set -uo pipefail
 
@@ -87,8 +91,9 @@ _flag_target() {
 }
 
 # S2 (fix-cycle round 2): a delegation target is only valid when it's the
-# pinned worktree convention (`.claude/worktrees/<slug>`, skills/build/SKILL.md
-# Step 2), or the orchestrator's OWN documented delegation variable `$WORKTREE`
+# pinned worktree convention (`.claude/worktrees/<slug>`, retained for worktrees
+# this plugin did not create), this run's own worktree as exported in
+# `$LITE_WORKTREE`, or the orchestrator's OWN delegation variable `$WORKTREE`
 # / `${WORKTREE}` (optionally with a trailing subpath, e.g. `$WORKTREE/.git`
 # for the `git --git-dir=` idiom) — never any other bare shell variable such as
 # `$PWD`/`$HOME`/`$OLDPWD`, all of which resolve to REPO_ROOT or an
