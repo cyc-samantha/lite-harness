@@ -1,87 +1,88 @@
 # lite-harness
 
-Lightweight Claude Code harness: `/lite:build` runs a defined idea through Plan → Build (TDD) → Test → Review → PR — good-practice code quality, prototype-grade ceremony. It is a companion to, not a replacement for, the full production harness, and it installs the same way — clone into `~/.claude`, run `setup.sh` — not via the plugin marketplace. It intentionally omits intake fingerprinting, Best-of-N/PDR-RTV build variants, the Final Gate quartet, deploy, and the continuous-learning loop (see `PLAN.md` §2 for what was cut and why).
+An execution layer. A sealed work contract goes in; a branch with evidence for
+every acceptance criterion comes out.
 
-**Status: L1-L6 landed; L7 (E2E validation) in progress.** See `TASKS.md` for per-task status and `PLAN.md` for the full design.
+It does not decide whether the work is done. It produces evidence, and the work
+source adjudicates that against criteria a person sealed. That division is the
+whole design: **the thing doing the work never grades it.**
 
-## Prerequisites
+## What it is not
 
-- **Claude Code** (no plugin marketplace enrollment needed — see Install below).
-- **`jq`** — the hooks parse tool-call JSON with it. Without `jq` the guards degrade to no-ops.
-- **`gh`**, authenticated (`gh auth status`) — the final `/lite:build` step opens a PR.
-- **`bats`** — only needed to run this repo's test suite (`bats tests/shell/`), not to use the plugin.
+Not a planner — the plan was made and sealed upstream, and re-planning during
+execution amends a contract without saying so. Not a ticket system. Not a
+reviewer of its own output. Not tied to any one codebase or any one place work
+comes from.
 
-## Install
+## Onboarding a project: three steps
 
-There are two ways to install lite-harness.
+If this ever takes four, something project-specific has leaked into the engine.
 
-### 1. Plugin marketplace (recommended when you also run the heavy/production harness as your primary `~/.claude`)
+1. Install this plugin.
+2. Add `.harness/project.yaml` to the target repository — see
+   `examples/factory-map.project.yaml`.
+3. Point at a work source: `LITE_SOURCE_URL`.
 
-```
-/plugin marketplace add cyc-samantha/lite-harness
-/plugin install lite@lite-harness
-```
+Then `/run <contract-id>`.
 
-Then start Claude Code in any project repo and run `/lite:build "<a small, well-defined idea>"`.
+## Layout
 
-### 2. Manual clone (for when lite-harness IS your only `~/.claude` install, e.g. a lite-only machine/config dir)
+| Directory | Contains | Rule |
+|---|---|---|
+| `ports/` | The two interfaces the engine depends on | No implementation |
+| `adapters/` | One work source's wire format and quirks | The only place upstream types appear |
+| `engine/` | Admission, gates, evidence, scope, run record | Names no project, imports no adapter |
+| `bin/` | The composition root | The only file that knows both sides |
+| `roles/` | Three prompts | No repository facts |
+| `hooks/` | Four guards | Path-based, never role-based |
 
-Clone straight into your Claude config dir and run the idempotent bootstrap.
+## The eight admission checks
+
+Nothing reaches an agent until all of them pass. They read contract shape and
+declared capability — never source — so they are identical for every project and
+cost no model call at all.
+
+Contract shape · seal integrity · authority · dependencies · capability match ·
+scope resolvable · protected-path conflict · environment ready.
+
+Each refuses on input it cannot evaluate. A reference that will not resolve, a
+dependency the source has never heard of, a gate whose command is missing: all
+stop the run rather than proceeding on the assumption it was probably fine.
+
+## The gate ladder
+
+Declared by the target repository, in declared order, stopping at the first red.
+Order is the cost model. A `record_only` rung measures without blocking — a
+threshold nobody has data for is a guess, and a gate that fails on a guess gets
+routed around until it means nothing.
+
+The rung that matters most runs the test the contract named for each criterion.
+Its exit code becomes that criterion's evidence, which is what takes the verdict
+out of the model's hands.
+
+## Staying light
+
+Three tests do the work that discipline otherwise has to:
+
+- `engine-purity` — the engine imports no adapter, names no project, hardcodes no
+  host. Every pressure on a harness pushes toward one small project-specific
+  branch in the engine; a year of that and no new project can be added.
+- `token-budget` — always-loaded rules and role prompts stay under their limits.
+  Prompt text is paid for on every spawn forever, and it crowds out the rules
+  that actually constrain the work.
+- `schema-conformance` — the two formats crossing the boundary still parse.
+
+A budget nobody can fail is a wish. These fail the build.
+
+## Development
 
 ```bash
-# 1. Clone into your Claude config dir
-git clone <repo> ~/.claude
-
-# 2. Run the idempotent bootstrap (checks for required tools, chmods hooks, validates settings.json)
-bash ~/.claude/setup.sh
-# setup.sh only checks for jq/gh/bats and WARNs if any are missing — it does not
-# install them. On macOS, install any missing tools yourself first:
-brew install jq gh bats-core
-# On Linux / Claude Code Cloud, provision tools with the installer script instead:
-bash ~/.claude/scripts/install-tools.sh --yes && bash ~/.claude/setup.sh
-
-# 3. Start Claude Code in any repo and run:
-> /lite:build "<a small, well-defined idea>"
+npm run check      # typecheck + unit tests
+bats tests/shell/  # the hooks
 ```
 
-`settings.json` at the repo root wires the four hooks directly for the manual-clone path; `hooks/hooks.json` is the equivalent plugin-manifest form used by the marketplace path. Both forms point at the same hook scripts, so the two install paths behave identically. The `/lite:` namespace comes from `.claude-plugin/plugin.json`'s `name: "lite"`, which Claude Code honors whether the repo got there via `git clone` or `/plugin install`.
+## Status
 
-If you already run the heavy harness as your `~/.claude`, don't clone lite-harness on top of it — the two are meant to coexist as separate installs (see `PLAN.md` §7), so add lite-harness as a marketplace plugin in that case, or point `CLAUDE_CONFIG_DIR` at a second config dir for lite-only projects.
-
-Guards (`orchestrator-guard`, `main-branch-guard`) only enforce while a `/lite:build` run is in flight, so installing does not interfere with ordinary interactive work; set `LITE_GUARDS=off` in the environment to force-disable them regardless of run state.
-
-## Usage
-
-Three user commands:
-
-- `/lite:build "<idea>"` — run a defined idea end-to-end: Plan (planner) → Build (software-engineer, TDD) → Test (qa-engineer) → Review (code-reviewer) → PR (opened, never merged). The happy path spawns ≤5 agents.
-- `/lite:resume [<slug>]` — continue a run after a usage-limit reset, crash, or killed session. With no slug it picks the most-recently-active non-done run. Reconciles `STATE.md` against git ground truth, then re-enters the pipeline at the recorded phase.
-- `/lite:status [<slug>|all]` — read-only report of one or all runs (phase, task progress, open findings, review loops, last seen). Never mutates state, never spawns agents.
-
-## Where run state lives
-
-Per-run bookkeeping is written to a per-machine, non-git-tracked location resolved through this fallback chain (Claude Code sets `CLAUDE_PLUGIN_ROOT` but not `CLAUDE_PLUGIN_DATA` for plugins, so the fallback is mandatory — see `hooks/_lib/lite-paths.sh`):
-
-```
-${CLAUDE_PLUGIN_DATA:-${CLAUDE_CONFIG_DIR:-$HOME/.claude}}/lite/runs/<slug>/STATE.md
-```
-
-`STATE.md` is ephemeral orchestration state; the run's durable deliverable, `plan.md`, is committed to the run's `lite/<slug>` branch instead. See `templates/README.md` for the split and `PLAN.md` §5 for the resume model.
-
-## Uninstall
-
-```bash
-rm -rf ~/.claude
-```
-
-(Or, if you installed it as a marketplace plugin instead: `/plugin uninstall lite@lite-harness && /plugin marketplace remove lite-harness`.)
-
-Either way, run state under `.../lite/runs/` is not deleted by removing the harness itself; delete that directory manually if you want a clean slate.
-
-## Running the tests
-
-```
-bats tests/shell/
-```
-
-Covers the four hooks' Iron-Law-8 fail-closed behavior, run-scoped guard gating, self-locating checkpoints, and the packaging invariants (hooks committed executable, LF-only line endings).
+Slice 1: one contract, one run, start to submitted. Not yet built: concurrent
+runs, the merge queue, risk-routed review, the failure decision table, and
+retry budgets. See the design spec for what each of those is waiting on.
