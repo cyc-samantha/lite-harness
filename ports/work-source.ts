@@ -112,6 +112,16 @@ export interface WorkSource {
   /** Resolves undefined when the source has never heard of this contract. */
   stateOf(contractId: string): Promise<WorkItemState | undefined>;
 
+  /**
+   * How many runs this contract has already had that ended, however they ended.
+   *
+   * Rejects rather than answering zero when the count cannot be established. A
+   * caller asking this is deciding whether to spend another attempt, and an
+   * unreadable history that reads as "none yet" removes the limit precisely when
+   * the source is unhealthy.
+   */
+  attemptsSpent(contractId: string): Promise<number>;
+
   /** Rejects when the work is not available — somebody else claimed it first. */
   claim(contractId: string, agent: string): Promise<Claim>;
 

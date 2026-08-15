@@ -31,6 +31,18 @@ export const RUN_PHASES = [
 
 export type RunPhase = (typeof RUN_PHASES)[number];
 
+/**
+ * What the last red rung was, so "the same failure twice" is answerable.
+ *
+ * A run cannot tell a repair that achieved nothing from one that changed the
+ * error unless it remembers what the error was, and it cannot remember anything
+ * across two invocations of a CLI except on disk.
+ */
+export interface LastRed {
+  gateId: string;
+  signature: string;
+}
+
 export interface RunState {
   runId: string;
   contractId: string;
@@ -40,7 +52,11 @@ export interface RunState {
   branch?: string;
   worktree?: string;
   prUrl?: string;
+  /** Consecutive retries of the gate named in `lastRed`. */
   gateAttempts: number;
+  /** Every rung this run has executed, which is what the ceiling counts. */
+  gateRuns: number;
+  lastRed?: LastRed;
 }
 
 export function statePath(dataDir: string, runId: string): string {
@@ -48,7 +64,17 @@ export function statePath(dataDir: string, runId: string): string {
 }
 
 export function newRun(runId: string, contractId: string, now: string): RunState {
-  return { runId, contractId, phase: 'claimed', startedAt: now, updatedAt: now, gateAttempts: 0 };
+  return { runId, contractId, phase: 'claimed', startedAt: now, updatedAt: now, gateAttempts: 0, gateRuns: 0 };
+}
+
+/** Minutes since the run was claimed, which is half of what the ceiling watches. */
+export function elapsedMinutes(state: RunState, now: string): number {
+  const started = Date.parse(state.startedAt);
+  const current = Date.parse(now);
+  // WHY: an unreadable clock reports an exhausted budget rather than a fresh one.
+  // The ceiling's job is to stop a run it cannot account for.
+  if (!Number.isFinite(started) || !Number.isFinite(current)) return Number.POSITIVE_INFINITY;
+  return (current - started) / 60_000;
 }
 
 export function hasReached(state: RunState, phase: RunPhase): boolean {

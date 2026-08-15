@@ -19,6 +19,12 @@ Read `rules/core.md` before anything else. It is short on purpose.
 | `LITE_SOURCE_URL` | Base URL of the work source |
 | `LITE_DATA` | Where run state and worktrees live |
 | `LITE_MODEL_ID` | Which model is driving this run. The engine cannot observe it, so an unset value is recorded as `unreported` rather than guessed |
+| `LITE_MAX_GATE_RUNS` | Rungs one run may execute before it halts (default 30) |
+| `LITE_MAX_WALL_MINUTES` | Minutes one run may take before it halts (default 90) |
+
+The two limits count what the engine can see. Tokens and money are what you would
+rather cap, but the engine only ever observes commands and a clock, and a ceiling
+enforced on a number a model reports about itself is not a ceiling.
 
 ## The lease
 
@@ -94,15 +100,43 @@ around.
 node bin/lite.ts gates <runId>
 ```
 
-Exit 2 means a rung went red. Hand the printed output **back to the same
-implementer subagent** and let it fix the problem in place. Do not spawn a fresh
-implementer — the context that produced the code is the context that should
-repair it. If you do need to re-spawn, ask for the prompt again: it now carries
-the failure, and its shared prefix is unchanged, so the cache still holds.
+The exit code tells you what kind of failure it was, and the printed decision
+tells you why:
 
-Re-run gates after each fix. **After three red returns on the same gate, stop and
-escalate**: report the gate, the error, and what was tried. Repeating a fourth
-time has never once been the thing that worked.
+| Exit | Meaning |
+|---|---|
+| 0 | every rung passed |
+| 2 | retryable — fix it and run gates again |
+| 3 | **do not retry.** The table has already decided this cannot be fixed by trying again |
+
+On exit 2, hand the printed output **back to the same implementer subagent** and
+let it fix the problem in place. Do not spawn a fresh implementer — the context
+that produced the code is the context that should repair it. If you must
+re-spawn, ask for the prompt again: it now carries the failure, and its shared
+prefix is unchanged, so the cache still holds.
+
+On exit 3, stop. The run has hit a broken seal, a spent budget, a missing tool, a
+gate that has had its three attempts, or a failure identical to the last one.
+None of those get better on a fourth try. Ask for a judgement:
+
+```bash
+node bin/lite.ts prompt <runId>:escalation-judge
+```
+
+The judge answers `retry`, `escalate`, or `amend`. Then send the packet:
+
+```bash
+node bin/lite.ts escalate <runId> <<'EOF'
+<what was seen, what was tried, what should happen>
+EOF
+```
+
+Add `amend` as a second argument when the contract itself is the problem:
+`escalate <runId> amend`. That is the road most often missed — a run that finds
+the sealed contract contradictory should say so, not quietly build something
+else and not silently give up.
+
+Both forms hand the work back to its source. Neither is a failure of yours.
 
 ### 5. Scope
 
