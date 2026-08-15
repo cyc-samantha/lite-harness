@@ -69,6 +69,15 @@ export function ticketSystemSource(options: TicketSystemOptions): WorkSource {
       }
     },
 
+    /**
+     * A run is spent once it has an outcome. The live one, if there is a live
+     * one, is the caller's own claim in progress and is not history yet.
+     */
+    async attemptsSpent(contractId: string): Promise<number> {
+      const body = (await request('GET', `/v1/work-items/${contractId}`)) as { runs?: { outcome?: string }[] };
+      return (body.runs ?? []).filter((run) => run.outcome !== undefined).length;
+    },
+
     async claim(contractId: string, agent: string): Promise<Claim> {
       const claimed = (await request('POST', `/v1/work-items/${contractId}/claim`, { agent })) as ClaimResponse;
       return { runId: claimed.runId, contract: await contractFor(claimed.versionId) };

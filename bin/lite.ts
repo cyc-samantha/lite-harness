@@ -29,15 +29,16 @@ import { ticketSystemSource } from '../adapters/ticket-system/index.ts';
 import { loadProjectConfig, type ProjectConfig } from '../ports/project-capabilities.ts';
 import type { Checkpoint, WorkContract, WorkSource } from '../ports/work-source.ts';
 
-import { evidenceFrom } from '../engine/evidence.ts';
-import { runLadder, type LadderResult } from '../engine/gates.ts';
+import { evidenceFrom, type TestLocator } from '../engine/evidence.ts';
+import { classify, errorSignature, type FailureAction, type Observation } from '../engine/failure-table.ts';
+import { runLadder, type GateOutcome, type LadderResult } from '../engine/gates.ts';
 import { renewLease } from '../engine/lease.ts';
 import { preflight, type PreflightDeps } from '../engine/preflight.ts';
 import { assemble, type RolePayload } from '../engine/prompt.ts';
-import { branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, type Repo } from '../engine/repo.ts';
+import { branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, worktreeFiles, type Repo } from '../engine/repo.ts';
 import { describeViolations, scopeViolations } from '../engine/scope-check.ts';
 import { canRun, shellRunner } from '../engine/shell.ts';
-import { advanced, hasReached, loadState, newRun, saveState, type RunState } from '../engine/state.ts';
+import { advanced, elapsedMinutes, hasReached, loadState, newRun, saveState, type RunState } from '../engine/state.ts';
 
 /** This harness's own install directory — where roles/ lives. */
 const HARNESS_ROOT = resolve(import.meta.dirname, '..');
@@ -115,6 +116,12 @@ async function contractOf(config: Settings, runId: string): Promise<WorkContract
 
 const now = (): string => new Date().toISOString();
 
+async function readStdin(): Promise<string> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks).toString('utf8').trim();
+}
+
 /** The actor when the engine itself is reporting, rather than a role. */
 const ENGINE = 'engine';
 
@@ -179,6 +186,31 @@ async function sendCheckpoint(
 }
 
 /**
+ * How many runs one contract may have before a person looks at it.
+ *
+ * The two retry limits count different things and must not be conflated. Inside
+ * a run, a red gate is retried by the implementer that wrote the code. At this
+ * level, a whole run failed and a fresh one starts from nothing. Leave either
+ * uncapped and the other multiplies it.
+ */
+const RUN_ATTEMPT_LIMIT = 2;
+
+/**
+ * SAFETY: a history that cannot be read stops the claim rather than allowing it.
+ * This cap is the only thing counting run attempts — the work source records
+ * them and does not limit them — so treating an unreadable history as "no
+ * attempts yet" would remove the limit exactly when the source is unhealthy,
+ * which is when runs are most likely to be failing and being retried.
+ */
+async function refuseExhaustedContract(source: WorkSource, contractId: string): Promise<void> {
+  const spent = await source.attemptsSpent(contractId).catch((error: unknown) =>
+    fail(`cannot count the attempts already spent on ${contractId}: ${error instanceof Error ? error.message : String(error)}`),
+  );
+  if (spent < RUN_ATTEMPT_LIMIT) return;
+  fail(`${contractId} has already had ${spent} run(s) and the limit is ${RUN_ATTEMPT_LIMIT}. A third attempt at unchanged work is a person's decision, not this run's.`);
+}
+
+/**
  * Claims the work, admits it, and prepares an isolated worktree — in that order,
  * so a contract that fails admission has cost one HTTP call and no filesystem.
  */
@@ -188,7 +220,13 @@ async function commandStart(contractId: string): Promise<void> {
   const repo: Repo = { root: config.targetRoot, runner: shellRunner };
   const project = await projectConfig(config.targetRoot);
 
-  const claim = await source.claim(contractId, config.agent);
+  await refuseExhaustedContract(source, contractId);
+  // Losing a race to claim is an ordinary outcome of polling a shared queue, not
+  // a crash. A stack trace here would tell an operator to debug the harness when
+  // the correct response is to take the next contract.
+  const claim = await source.claim(contractId, config.agent).catch((error: unknown) =>
+    fail(`could not claim ${contractId}: ${error instanceof Error ? error.message : String(error)}`),
+  );
   const state = newRun(claim.runId, contractId, now());
   await saveState(config.dataDir, state);
   await writeArtifact(config, claim.runId, 'contract.json', claim.contract);
@@ -217,6 +255,47 @@ async function commandStart(contractId: string): Promise<void> {
   process.stdout.write(`${JSON.stringify({ runId: claim.runId, worktree, branch }, null, 2)}\n`);
 }
 
+/**
+ * How many rungs a run may execute, and how long it may take.
+ *
+ * These are the executor's limits, not the project's, so they are not in
+ * `project.yaml`: a target repository declares what it can do, not how much of
+ * somebody else's budget a run may spend on it. Both are things the engine can
+ * count without asking a model what it thinks it used.
+ */
+function ceiling(): { maxGateRuns: number; maxWallMinutes: number } {
+  return {
+    maxGateRuns: Number(process.env['LITE_MAX_GATE_RUNS'] ?? 30),
+    maxWallMinutes: Number(process.env['LITE_MAX_WALL_MINUTES'] ?? 90),
+  };
+}
+
+/** Retries of this same gate, counting the red that just happened. */
+function attemptsOn(state: RunState, gateId: string): number {
+  return state.lastRed?.gateId === gateId ? state.gateAttempts + 1 : 1;
+}
+
+function observe(state: RunState, red: GateOutcome, gateRuns: number): Observation {
+  const sameGate = state.lastRed?.gateId === red.gateId;
+  return {
+    redGate: { gateId: red.gateId, exitCode: red.exitCode, output: red.output },
+    ...(sameGate && state.lastRed ? { previousSignature: state.lastRed.signature } : {}),
+    attemptsOnThisGate: attemptsOn(state, red.gateId),
+    sealBroken: false,
+    scopeViolations: 0,
+    baseMoved: false,
+    budget: { gateRuns, wallMinutes: elapsedMinutes(state, now()), ...ceiling() },
+  };
+}
+
+/**
+ * A red rung the orchestrator should repair in place exits 2; anything it must
+ * not simply retry exits 3. The distinction is the whole point of the table —
+ * without it every failure looks like "try again", which is how a run spends its
+ * budget discovering nothing.
+ */
+const RETRYABLE: readonly FailureAction[] = ['retry', 'retry_in_place', 'rebase_and_retry'];
+
 async function commandGates(runId: string): Promise<void> {
   const config = settings();
   const state = await loadRun(config, runId);
@@ -227,17 +306,59 @@ async function commandGates(runId: string): Promise<void> {
 
   const ladder = await runLadder(contract, project, { cwd: worktree, runId, env: {} }, shellRunner);
   await writeArtifact(config, runId, 'ladder.json', ladder);
-  await saveState(config.dataDir, ladder.passed
-    ? advanced(state, 'gates_passed', now())
-    : { ...state, gateAttempts: state.gateAttempts + 1, updatedAt: now() });
+  const gateRuns = state.gateRuns + ladder.outcomes.length;
 
-  const summary = ladder.outcomes.map((outcome) => `${outcome.passed ? 'ok  ' : 'FAIL'} ${outcome.gateId}`);
-  process.stdout.write(`${summary.join('\n')}\n`);
-  if (!ladder.passed) {
-    const red = ladder.outcomes.at(-1);
-    process.stdout.write(`\nstopped at ${ladder.stoppedAt}\n\n${red?.output ?? ''}\n`);
-    process.exit(2);
+  process.stdout.write(`${ladder.outcomes.map((o) => `${o.passed ? 'ok  ' : 'FAIL'} ${o.gateId}`).join('\n')}\n`);
+  if (ladder.passed) {
+    await saveState(config.dataDir, { ...advanced(state, 'gates_passed', now()), gateRuns, gateAttempts: 0 });
+    return;
   }
+  await reportRed(config, state, ladder, gateRuns);
+}
+
+async function reportRed(config: Settings, state: RunState, ladder: LadderResult, gateRuns: number): Promise<void> {
+  const red = ladder.outcomes.at(-1) ?? fail('the ladder failed without a failing rung, which it cannot do');
+  const decision = classify(observe(state, red, gateRuns));
+  await saveState(config.dataDir, {
+    ...state,
+    gateRuns,
+    gateAttempts: attemptsOn(state, red.gateId),
+    lastRed: { gateId: red.gateId, signature: errorSignature(red.output) },
+    updatedAt: now(),
+  });
+
+  process.stdout.write(`\nstopped at ${ladder.stoppedAt}\n\n${red.output}\n`);
+  process.stdout.write(`\n${decision.category} → ${decision.action}\n${decision.why}\n`);
+  process.exit(RETRYABLE.includes(decision.action) ? 2 : 3);
+}
+
+/**
+ * Reports why this run is handing the work back, and hands it back.
+ *
+ * The packet arrives on stdin because its useful content is a judgement — what
+ * was seen, what was tried, what should change — and that is the orchestrator's
+ * to write. What this command guarantees is that the judgement reaches the
+ * ledger and that the work is released rather than left to time out.
+ *
+ * `amend` is the third road, and the one most often missing: a run that finds the
+ * sealed contract self-contradictory should neither quietly build something else
+ * nor simply give up. Both of those are worse than saying so.
+ */
+async function commandEscalate(runId: string, extra: string[]): Promise<void> {
+  const config = settings();
+  const state = await loadRun(config, runId);
+  const source = ticketSystemSource({ baseUrl: config.sourceUrl });
+  const amending = extra[0] === 'amend';
+  const packet = await readStdin();
+  if (!packet) fail('an escalation with no account of what happened is worth nothing — write the packet on stdin');
+
+  await sendCheckpoint(source, config, state, ENGINE, {
+    step: amending ? 'amendment_proposed' : 'escalated',
+    summary: packet.split('\n')[0]?.slice(0, 200) ?? 'escalated',
+    payload: { packet, phase: state.phase, gate_runs: state.gateRuns, last_red: state.lastRed ?? null },
+  });
+  await source.fail(runId);
+  process.stdout.write(`${amending ? 'amendment proposed' : 'escalated'}; the work is back with its source\n`);
 }
 
 async function commandScope(runId: string): Promise<void> {
@@ -272,11 +393,35 @@ async function commandSubmit(runId: string): Promise<void> {
   // to claim the work again — which is how finished work gets done twice.
   if (hasReached(state, 'submitted')) fail('this run has already submitted its evidence');
   await beat(source, runId);
-  const evidence = evidenceFrom(contract, ladder);
+  const evidence = evidenceFrom(contract, ladder, await namedTests(config, state));
   const verdict = await source.submit(runId, evidence);
   await saveState(config.dataDir, advanced(state, 'submitted', now()));
   await writeArtifact(config, runId, 'verdict.json', verdict);
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
+}
+
+/**
+ * Finds the tests the contract names, so a green rung can be believed.
+ *
+ * A criterion's `file` is written relative to wherever the test runner runs,
+ * which is the project's business and not the engine's — so the match is on the
+ * end of the path rather than the whole of it. The name is looked for as literal
+ * text in that file, which is the most any engine can check without knowing the
+ * language it is reading.
+ */
+async function namedTests(config: Settings, state: RunState): Promise<TestLocator> {
+  const worktree = state.worktree ?? fail('this run has no worktree');
+  const repo: Repo = { root: config.targetRoot, runner: shellRunner };
+  const files = await worktreeFiles(repo, worktree);
+  const contents = new Map<string, string>();
+  for (const path of files) contents.set(path, await readFile(join(worktree, path), 'utf8').catch(() => ''));
+
+  return (criterion) => {
+    const test = criterion.targetTest;
+    if (!test) return false;
+    const candidates = files.filter((path) => path === test.file || path.endsWith(`/${test.file}`));
+    return candidates.some((path) => (contents.get(path) ?? '').includes(test.name));
+  };
 }
 
 /**
@@ -290,9 +435,7 @@ async function commandPack(runId: string): Promise<void> {
   const config = settings();
   const state = await loadRun(config, runId);
   await beat(ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
-  const chunks: Buffer[] = [];
-  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
-  const pack = Buffer.concat(chunks).toString('utf8').trim();
+  const pack = await readStdin();
   if (!pack) fail('the context pack is empty');
   await writeFile(join(runDir(config, runId), 'pack.md'), `${pack}\n`, 'utf8');
   await saveState(config.dataDir, advanced(state, 'packed', now()));
@@ -347,11 +490,39 @@ async function commandPr(runId: string, extra: string[]): Promise<void> {
 
 async function payloadFor(config: Settings, runId: string, role: string): Promise<RolePayload> {
   const state = await loadRun(config, runId);
-  const worktree = state.worktree ?? fail('this run has no worktree');
   if (role === 'context-packer') return { role, repoRoot: config.targetRoot };
+  if (role === 'escalation-judge') return { role, history: await failureHistory(config, state) };
+  const worktree = state.worktree ?? fail('this run has no worktree');
   if (role === 'implementer') return implementerPayload(config, runId, worktree);
   if (role === 'reviewer') return reviewerPayload(config, runId, worktree);
+  if (role === 'splitter') return splitterPayload(config, state, worktree);
   fail(`unknown role: ${role}`);
+}
+
+/**
+ * What this run has been through, in the terms the table decided them in.
+ *
+ * The judge gets the history and not the repository. It is being asked whether
+ * the contract can be delivered at all, and a judge that can go and look will
+ * start solving the problem instead of answering the question.
+ */
+async function failureHistory(config: Settings, state: RunState): Promise<string[]> {
+  const ladder = await readFile(join(runDir(config, state.runId), 'ladder.json'), 'utf8').catch(() => '');
+  const result = ladder ? (JSON.parse(ladder) as LadderResult) : undefined;
+  const red = result && !result.passed ? result.outcomes.at(-1) : undefined;
+  return [
+    `phase reached: ${state.phase}`,
+    `gate rungs run: ${state.gateRuns}, retries on the last red gate: ${state.gateAttempts}`,
+    `elapsed: ${Math.round(elapsedMinutes(state, now()))} minute(s)`,
+    ...(red ? [`last red: ${red.gateId} exited ${red.exitCode}`, `output: ${red.output.slice(-2_000)}`] : []),
+  ];
+}
+
+async function splitterPayload(config: Settings, state: RunState, worktree: string): Promise<RolePayload> {
+  const project = await projectConfig(config.targetRoot);
+  const repo: Repo = { root: config.targetRoot, runner: shellRunner };
+  const changed = await changedPaths(repo, worktree, project.pr.base);
+  return { role: 'splitter', filesChanged: changed.length };
 }
 
 async function implementerPayload(config: Settings, runId: string, worktree: string): Promise<RolePayload> {
@@ -384,7 +555,7 @@ async function reviewerPayload(config: Settings, runId: string, worktree: string
  */
 async function commandPrompt(argument: string): Promise<void> {
   const [runId, role] = argument.split(':');
-  if (!runId || !role) fail('usage: prompt <runId>:<context-packer|implementer|reviewer>');
+  if (!runId || !role) fail('usage: prompt <runId>:<context-packer|implementer|reviewer|splitter|escalation-judge>');
   const config = settings();
   await beat(ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
   const roleText = await readFile(join(HARNESS_ROOT, 'roles', `${role}.md`), 'utf8').catch(() =>
@@ -426,6 +597,7 @@ const COMMANDS: Record<string, Command> = {
   prompt: commandPrompt,
   beat: commandBeat,
   pr: commandPr,
+  escalate: commandEscalate,
   report: commandReport,
 };
 

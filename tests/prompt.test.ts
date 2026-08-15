@@ -102,3 +102,40 @@ describe('the implementer', () => {
     expect(implementer('tsc: 3 errors').text).toContain('Do not weaken the test');
   });
 });
+
+describe('the conditional roles', () => {
+  const judge = (): ReturnType<typeof promptFor> =>
+    promptFor({ role: 'escalation-judge', history: ['phase reached: packed', 'last red: typecheck exited 1'] });
+
+  const splitter = (): ReturnType<typeof promptFor> => promptFor({ role: 'splitter', filesChanged: 14 });
+
+  it('shares its prefix with the resident roles, so a run pays for it once', () => {
+    expect(judge().sharedPrefix).toEqual(reviewer().sharedPrefix);
+    expect(splitter().sharedPrefix).toEqual(reviewer().sharedPrefix);
+  });
+
+  it('gives the judge the history and not the repository', () => {
+    const text = judge().text;
+    expect(text).toContain('last red: typecheck exited 1');
+    expect(text).not.toContain(PACK);
+    expect(text).not.toContain('/wt');
+  });
+
+  it('has nowhere to hand the judge a worktree, which is why that holds', () => {
+    // @ts-expect-error an escalation-judge payload has no worktree field, by construction
+    const forbidden: RolePayload = { role: 'escalation-judge', history: [], worktree: '/wt' };
+    expect(forbidden).toBeDefined();
+  });
+
+  it('tells the splitter how large the change is, not what is in it', () => {
+    const text = splitter().text;
+    expect(text).toContain('14 file(s)');
+    expect(text).not.toContain(DIFF);
+  });
+
+  it('has nowhere to hand the splitter a diff, which is why that holds', () => {
+    // @ts-expect-error a splitter payload has no diff field, by construction
+    const forbidden: RolePayload = { role: 'splitter', filesChanged: 14, diff: DIFF };
+    expect(forbidden).toBeDefined();
+  });
+});

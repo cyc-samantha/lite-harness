@@ -32,6 +32,18 @@ export async function trackedFiles(repo: Repo): Promise<string[]> {
 }
 
 /**
+ * Every file in the worktree a run could have written, tracked or not.
+ *
+ * Untracked files are included because a test written during the run has not
+ * been committed yet at the moment anything wants to look for it, and a test
+ * that cannot be found reads exactly like a test that was never written.
+ */
+export async function worktreeFiles(repo: Repo, worktree: string): Promise<string[]> {
+  const listing = await git(repo, 'ls-files --cached --others --exclude-standard', worktree);
+  return listing.split('\n').filter((line) => line.length > 0);
+}
+
+/**
  * SAFETY: an unreadable reference resolves to undefined rather than to a digest
  * of nothing. Preflight treats that as a broken seal, which is the correct
  * reading — a reference the run cannot open is one it cannot claim to have read.

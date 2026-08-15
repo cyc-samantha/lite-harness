@@ -167,10 +167,22 @@ Each is fixed, with tests. The lease itself was validated the hard way: the pilo
 outlived its lease mid-run, the work source requeued the contract, and the next
 command refused rather than acting on work it no longer held.
 
-Not yet built: concurrent runs and the merge queue that would make them safe,
-risk-routed review, the failure decision table, and retry budgets — the last of
-which needs two separate caps, since retrying a red gate within a run and
-retrying the run itself fail for different reasons. The run-level cap has to live
-here rather than upstream, which records attempts but does not limit them.
+Slice 2 is done: failures are classified, retries are bounded, and a run that
+cannot finish hands the work back with an account of why.
+
+Deliberately bad contracts were run against the live system. A broken seal and a
+scope matching no files are refused at admission. A permanently red gate is
+retried once, then recognised as the identical failure and sent to a judge rather
+than retried again. A third claim on a twice-failed contract is refused, and so
+is any claim whose attempt history cannot be read.
+
+That exercise found the worst defect so far: a contract naming a test nobody had
+written was **accepted**. Runners that select tests by name exit zero when they
+match nothing, so the rung that proves an acceptance criterion proved a criterion
+nothing had touched. Evidence now requires the named test to exist as well as the
+rung to be green, and the same contract is rejected.
+
+Not yet built: concurrent runs and the merge queue that would make them safe, and
+risk-routed model review.
 
 [pilot]: https://github.com/cyc-samantha/harness-factory-map/pull/2

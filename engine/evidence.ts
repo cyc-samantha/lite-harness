@@ -38,7 +38,24 @@ function notReached(criterion: AcceptanceCriterion, stoppedAt: string | undefine
   return { acId: criterion.id, passed: false, note: `not evaluated: ${where}` };
 }
 
-function fromOutcome(criterion: AcceptanceCriterion, outcome: GateOutcome): Evidence {
+/**
+ * SAFETY: a green rung is not enough on its own; the test the criterion names
+ * must also exist. Test runners select by name and report success when the
+ * selection is empty — `vitest -t`, `pytest -k` and `rspec -e` all exit zero
+ * having run nothing — so a criterion naming a test that was never written
+ * produces a passing exit code and evidence that a person would act on. An exit
+ * code cannot be persuaded, but it can be asked the wrong question.
+ */
+function vacuous(criterion: AcceptanceCriterion): Evidence {
+  return {
+    acId: criterion.id,
+    passed: false,
+    note: `no test named "${criterion.targetTest?.name ?? ''}" exists in ${criterion.targetTest?.file ?? 'the named file'}; a runner that matched nothing exited zero`,
+  };
+}
+
+function fromOutcome(criterion: AcceptanceCriterion, outcome: GateOutcome, exists: boolean): Evidence {
+  if (outcome.passed && !exists) return vacuous(criterion);
   const verdict = outcome.passed ? 'passed' : `failed with exit ${outcome.exitCode}`;
   return {
     acId: criterion.id,
@@ -47,12 +64,16 @@ function fromOutcome(criterion: AcceptanceCriterion, outcome: GateOutcome): Evid
   };
 }
 
-function evidenceFor(criterion: AcceptanceCriterion, ladder: LadderResult): Evidence {
+/** Whether the test a criterion names could be found in the run's worktree. */
+export type TestLocator = (criterion: AcceptanceCriterion) => boolean;
+
+function evidenceFor(criterion: AcceptanceCriterion, ladder: LadderResult, locate: TestLocator): Evidence {
   if (HUMAN_OWNED.has(criterion.verification)) return deferred(criterion);
   const outcome = outcomeFor(criterion.id, ladder.outcomes);
-  return outcome ? fromOutcome(criterion, outcome) : notReached(criterion, ladder.stoppedAt);
+  if (!outcome) return notReached(criterion, ladder.stoppedAt);
+  return fromOutcome(criterion, outcome, locate(criterion));
 }
 
-export function evidenceFrom(contract: WorkContract, ladder: LadderResult): Evidence[] {
-  return contract.acceptance.map((criterion) => evidenceFor(criterion, ladder));
+export function evidenceFrom(contract: WorkContract, ladder: LadderResult, locate: TestLocator): Evidence[] {
+  return contract.acceptance.map((criterion) => evidenceFor(criterion, ladder, locate));
 }

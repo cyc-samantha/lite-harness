@@ -24,6 +24,7 @@ function sourceWhoseHeartbeat(behaviour: () => Promise<void>): Recorder {
     beats,
     listReady: (): Promise<string[]> => unused(),
     stateOf: (): Promise<WorkItemState | undefined> => unused(),
+    attemptsSpent: (): Promise<number> => unused(),
     claim: (): Promise<Claim> => unused(),
     async heartbeat(runId: string): Promise<void> {
       beats.push(runId);

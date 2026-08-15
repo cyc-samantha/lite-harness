@@ -33,7 +33,9 @@ import type { AcceptanceCriterion, WorkContract } from '../ports/work-source.ts'
 export type RolePayload =
   | { role: 'context-packer'; repoRoot: string }
   | { role: 'implementer'; worktree: string; contextPack: string; gateFailure?: string }
-  | { role: 'reviewer'; diff: string };
+  | { role: 'reviewer'; diff: string }
+  | { role: 'escalation-judge'; history: string[] }
+  | { role: 'splitter'; filesChanged: number };
 
 export interface PromptInputs {
   project: ProjectConfig;
@@ -95,6 +97,11 @@ function renderContract(contract: WorkContract): string {
 function renderPayload(payload: RolePayload): string {
   if (payload.role === 'context-packer') return `## Your task\n\nThe repository is at \`${payload.repoRoot}\`.`;
   if (payload.role === 'reviewer') return `## The diff\n\n\`\`\`diff\n${payload.diff}\n\`\`\``;
+  if (payload.role === 'escalation-judge') return `## What happened\n\n${payload.history.map((line) => `- ${line}`).join('\n')}`;
+  // The splitter is told how big the change is, not what is in it. Its question
+  // is whether the criteria are independent, which the contract answers; a diff
+  // would only invite it to review the code instead.
+  if (payload.role === 'splitter') return `## Scale\n\nThis change touches ${payload.filesChanged} file(s).`;
   return renderImplementerPayload(payload);
 }
 
