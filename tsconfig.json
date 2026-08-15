@@ -22,5 +22,5 @@
 
     "skipLibCheck": true
   },
-  "include": ["ports", "adapters", "engine", "tests"]
+  "include": ["ports", "adapters", "engine", "bin", "tests"]
 }
