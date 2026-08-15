@@ -34,7 +34,7 @@ import { runLadder, type LadderResult } from '../engine/gates.ts';
 import { renewLease } from '../engine/lease.ts';
 import { preflight, type PreflightDeps } from '../engine/preflight.ts';
 import { assemble, type RolePayload } from '../engine/prompt.ts';
-import { changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, type Repo } from '../engine/repo.ts';
+import { branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, type Repo } from '../engine/repo.ts';
 import { describeViolations, scopeViolations } from '../engine/scope-check.ts';
 import { canRun, shellRunner } from '../engine/shell.ts';
 import { advanced, hasReached, loadState, newRun, saveState, type RunState } from '../engine/state.ts';
@@ -205,7 +205,7 @@ async function commandStart(contractId: string): Promise<void> {
   }
 
   const worktree = worktreeFor(config, claim.runId);
-  const branch = `${project.pr.branch_prefix}${contractId.toLowerCase()}`;
+  const branch = branchName(project.pr.branch_prefix, contractId);
   await createWorktree(repo, { path: worktree, branch, base: project.pr.base });
   await saveState(config.dataDir, { ...advanced(state, 'admitted', now()), worktree, branch });
   await sendCheckpoint(source, config, state, ENGINE, {

@@ -47,6 +47,29 @@ export interface WorktreeRequest {
   base: string;
 }
 
+/**
+ * A branch name git will accept, derived from a contract id.
+ *
+ * Contract ids are `<adapter>:<spec>:<slice>` by convention and a colon is not
+ * legal in a ref, so joining a prefix to an id verbatim produces a name git
+ * refuses. That failure lands after the work has already been claimed upstream,
+ * which is the most expensive moment to discover it.
+ *
+ * SAFETY: an id that survives sanitising as nothing is refused rather than
+ * turned into a bare prefix. Every such contract would otherwise collapse onto
+ * the same branch, and the second run would fail on a collision whose cause is
+ * nowhere in the message.
+ */
+export function branchName(prefix: string, contractId: string): string {
+  const slug = contractId
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, '-')
+    .replace(/\.{2,}/g, '.')
+    .replace(/^[-._]+|[-._]+$/g, '');
+  if (!slug) throw new Error(`contract id has nothing a branch name can be built from: ${JSON.stringify(contractId)}`);
+  return `${prefix}${slug}`;
+}
+
 export async function createWorktree(repo: Repo, request: WorktreeRequest): Promise<void> {
   await git(repo, `worktree add -b ${q(request.branch)} ${q(request.path)} ${q(request.base)}`);
 }
