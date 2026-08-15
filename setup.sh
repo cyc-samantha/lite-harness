@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # setup.sh — Bootstrap script for a fresh ~/.claude install of lite-harness.
 # Idempotent: safe to run multiple times. Continues past soft failures so a
-# missing optional tool doesn't abort the whole run — see PLAN.md §7.
+# missing optional tool doesn't abort the whole run — a missing optional tool is reported, not fatal.
 # Usage: bash ~/.claude/setup.sh
 #
 # On Linux / Claude Code Cloud, provision tools first:
@@ -32,8 +32,8 @@ check_tool() {
 
 printf '\n%bStep 1: Checking required tools%b\n' "$BLUE" "$RESET"
 check_tool jq "hooks parse tool-call JSON with it; without it the guards degrade to no-ops"
-check_tool gh "the /lite:build PR step needs it (and \`gh auth status\` to be logged in)"
-check_tool bats "only needed to run tests/shell/ — not needed to use the pipeline"
+check_tool gh "the pull-request step needs it (and \`gh auth status\` to be logged in)"
+check_tool bats "only needed to run tests/shell/ — not needed to use the harness"
 check_tool git "required — lite-harness is unusable without git"
 
 printf '\n%bStep 2: Marking hooks executable%b\n' "$BLUE" "$RESET"
@@ -64,6 +64,8 @@ if [[ ${#FAIL[@]} -gt 0 ]]; then
   exit 1
 fi
 
-printf '\n%blite-harness is ready. Start Claude Code in any project repo and try:%b\n' "$GREEN" "$RESET"
-printf '  /lite:build "<a small, well-defined idea>"\n'
+printf '\n%blite-harness is ready. Next, in the repository you want it to work on:%b\n' "$GREEN" "$RESET"
+printf '  1. add .harness/project.yaml   (see examples/factory-map.project.yaml)\n'
+printf '  2. export LITE_TARGET=<that repo> LITE_SOURCE_URL=<work source>\n'
+printf '  3. /run <contract-id>\n'
 exit 0

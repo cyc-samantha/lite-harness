@@ -4,15 +4,15 @@
     "name": "cyc-samantha"
   },
   "metadata": {
-    "description": "Marketplace for lite-harness: a lightweight Plan -> Build (TDD) -> Test -> Review -> PR pipeline, companion to the full production harness.",
+    "description": "Marketplace for lite-harness: an execution layer that turns a sealed work contract into a branch with evidence.",
     "repository": "https://github.com/cyc-samantha/lite-harness"
   },
   "plugins": [
     {
-      "name": "lite",
+      "name": "lite-harness",
       "source": "./",
-      "description": "Lightweight prototype-grade pipeline: /lite:build, /lite:resume, /lite:status. Plan -> Build (TDD) -> Test -> Review -> PR.",
-      "version": "0.2.0"
+      "description": "Execution layer: /run <contract-id>. Claim, admit, implement in an isolated worktree, run the target repo's gates, submit evidence.",
+      "version": "0.1.0"
     }
   ]
 }
