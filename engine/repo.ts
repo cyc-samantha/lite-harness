@@ -51,27 +51,40 @@ export interface WorktreeRequest {
   base: string;
 }
 
-/**
- * A branch name git will accept, derived from a contract id.
- *
- * Contract ids are `<adapter>:<spec>:<slice>` by convention and a colon is not
- * legal in a ref, so joining a prefix to an id verbatim produces a name git
- * refuses. That failure lands after the work has already been claimed upstream,
- * which is the most expensive moment to discover it.
- *
- * SAFETY: an id that survives sanitising as nothing is refused rather than
- * turned into a bare prefix. Every such contract would otherwise collapse onto
- * the same branch, and the second run would fail on a collision whose cause is
- * nowhere in the message.
- */
-export function branchName(prefix: string, contractId: string): string {
-  const slug = contractId
+/** How much of a run id is enough to tell two attempts apart in a branch name. */
+const RUN_SUFFIX_LENGTH = 8;
+
+function slugify(value: string): string {
+  return value
     .toLowerCase()
     .replace(/[^a-z0-9._-]+/g, '-')
     .replace(/\.{2,}/g, '.')
     .replace(/^[-._]+|[-._]+$/g, '');
+}
+
+/**
+ * A branch name git will accept, unique to this run.
+ *
+ * Two things make the obvious `prefix + contractId` wrong. Contract ids are
+ * `<adapter>:<spec>:<slice>` by convention and a colon is not legal in a ref, so
+ * the branch cannot be created at all — a failure that lands after the work is
+ * already claimed upstream. And a contract that is retried would ask for a
+ * branch that already exists, so the second attempt either fails on a collision
+ * or silently continues the first attempt's work.
+ *
+ * The run id in the suffix is what makes the branch answerable afterwards: given
+ * a branch, the ledger says which attempt produced it.
+ *
+ * SAFETY: an id that survives sanitising as nothing is refused rather than
+ * quietly becoming a bare prefix, which would name the branch after no contract
+ * in particular.
+ */
+export function branchName(prefix: string, contractId: string, runId: string): string {
+  const slug = slugify(contractId);
   if (!slug) throw new Error(`contract id has nothing a branch name can be built from: ${JSON.stringify(contractId)}`);
-  return `${prefix}${slug}`;
+  const suffix = slugify(runId).slice(0, RUN_SUFFIX_LENGTH);
+  if (!suffix) throw new Error(`run id has nothing a branch name can be built from: ${JSON.stringify(runId)}`);
+  return `${prefix}${slug}-${suffix}`;
 }
 
 export async function createWorktree(repo: Repo, request: WorktreeRequest): Promise<void> {

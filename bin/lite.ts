@@ -205,7 +205,7 @@ async function commandStart(contractId: string): Promise<void> {
   }
 
   const worktree = worktreeFor(config, claim.runId);
-  const branch = branchName(project.pr.branch_prefix, contractId);
+  const branch = branchName(project.pr.branch_prefix, contractId, claim.runId);
   await createWorktree(repo, { path: worktree, branch, base: project.pr.base });
   await saveState(config.dataDir, { ...advanced(state, 'admitted', now()), worktree, branch });
   await sendCheckpoint(source, config, state, ENGINE, {
