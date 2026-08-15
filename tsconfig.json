@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2023",
+    "lib": ["ES2023"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
+
+    "strict": true,
+    "noUncheckedIndexedAccess": true,
+    "noImplicitOverride": true,
+    "exactOptionalPropertyTypes": true,
+
+    "noEmit": true,
+    "allowImportingTsExtensions": true,
+    "verbatimModuleSyntax": true,
+
+    // WHY: the engine is executed by Node's type stripping, never by tsc. Syntax
+    // that needs code generation (enums, namespaces, parameter properties) would
+    // typecheck here and then fail at runtime, so it is rejected up front.
+    "erasableSyntaxOnly": true,
+
+    "skipLibCheck": true
+  },
+  "include": ["ports", "adapters", "engine", "bin", "tests"]
+}

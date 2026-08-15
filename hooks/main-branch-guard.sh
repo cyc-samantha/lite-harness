@@ -41,10 +41,9 @@
 set -uo pipefail
 
 [[ "${LITE_GUARDS:-}" == "off" ]] && exit 0
-_LITE_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/_lib" && pwd 2>/dev/null)" || exit 0
-# shellcheck source=hooks/_lib/lite-paths.sh
-source "$_LITE_LIB_DIR/lite-paths.sh" 2>/dev/null || exit 0
-lite_has_active_run || exit 0
+# A run is in flight exactly when the engine has exported its worktree. Outside a
+# run there is no HEAD to protect and this would only obstruct ordinary git use.
+[[ -z "${LITE_WORKTREE:-}" ]] && exit 0
 
 INPUT="$(cat 2>/dev/null || true)"
 TOOL_NAME="$(printf '%s' "$INPUT" | jq -r '.tool_name // empty' 2>/dev/null)"
@@ -105,7 +104,10 @@ _is_worktree_delegation_target() {
   [[ -z "$target" ]] && return 1
   [[ "$target" == *"/.."* || "$target" == "../"* || "$target" == ".." ]] && return 1
   [[ "$target" == *".claude/worktrees/"* ]] && return 0
-  [[ "$target" =~ ^\$\{?WORKTREE\}?(/.*)?$ ]] && return 0
+  [[ "$target" =~ ^\$\{?(LITE_)?WORKTREE\}?(/.*)?$ ]] && return 0
+  # A literal path is acceptable only when it resolves inside this run's own
+  # worktree — the one directory the engine has told us this run owns.
+  [[ -n "${LITE_WORKTREE:-}" && "$target" == "$LITE_WORKTREE"* ]] && return 0
   return 1
 }
 

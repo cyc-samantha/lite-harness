@@ -1,0 +1,48 @@
+# Example declaration for harness-factory-map.
+#
+# Copy to `.harness/project.yaml` in that repository. It lives there, not here,
+# because it describes that codebase — it should be versioned, reviewed, and
+# rolled back alongside the code it describes, and a change to it should pass
+# that repository's own gates.
+#
+# Every command below was run against the repository before being written down.
+
+version: 1
+
+env:
+  ports: { base: 4300, stride: 10 }
+  tmp: .harness/run/{run_id}
+
+gates:
+  # Cheapest first. Nothing below a red rung runs, so an expensive gate never
+  # pays for a failure the compiler would have caught in seconds.
+  - id: typecheck
+    run: "npx tsc --noEmit"
+
+  - id: lint
+    run: "npx eslint ."
+
+  # One expansion per executable_test criterion, with the file and test name the
+  # contract named. This is the rung that produces evidence.
+  - id: target_test
+    run: "npx vitest run {file} -t {name}"
+    per_criterion: true
+
+  # The regression net: the named tests can all pass while something else breaks.
+  - id: full_suite
+    run: "npx vitest run"
+
+  # The build is a real gate here — `npm run generate` produces the map data the
+  # app is built from, so a change can typecheck and still fail to build.
+  - id: build
+    run: "npm run build"
+
+protected_paths:
+  - ".github/**"
+  - ".harness/**"
+  - "package-lock.json"
+
+pr:
+  base: main
+  branch_prefix: "agent/"
+  size_soft_limit: 10

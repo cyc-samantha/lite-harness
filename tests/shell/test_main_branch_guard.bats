@@ -10,16 +10,16 @@
 
 setup() {
   HOOK="$(cd "$BATS_TEST_DIRNAME/../../hooks" && pwd)/main-branch-guard.sh"
-  # F6: the guard only enforces while a lite run is active. Give every test an
-  # active (non-done) run so the Iron Law 4 block/allow assertions exercise the
-  # guard body; the no-active-run and LITE_GUARDS=off cases override this.
-  export CLAUDE_PLUGIN_DATA="$(mktemp -d)"
-  mkdir -p "$CLAUDE_PLUGIN_DATA/lite/runs/active"
-  printf -- '---\nphase: build\ncreated: 2026-07-09T08:00:00Z\n---\n' \
-    > "$CLAUDE_PLUGIN_DATA/lite/runs/active/STATE.md"
+  # The guard only enforces while a run is in flight, which the engine signals by
+  # exporting the run's worktree. Give every test one so the block/allow
+  # assertions exercise the guard body; the no-run and LITE_GUARDS=off cases
+  # override this.
+  LITE_TEST_HOME="$(mktemp -d)"
+  export LITE_WORKTREE="$LITE_TEST_HOME/worktrees/run-1"
+  mkdir -p "$LITE_WORKTREE"
 }
 
-teardown() { rm -rf "$CLAUDE_PLUGIN_DATA"; }
+teardown() { rm -rf "$LITE_TEST_HOME"; }
 
 _run_guard() {
   printf '{"tool_name":"Bash","tool_input":{"command":%s}}' \
@@ -160,7 +160,7 @@ _run_guard() {
 }
 
 @test "no active run → forbidden command is allowed (guard is dormant)" {
-  rm -rf "$CLAUDE_PLUGIN_DATA/lite/runs"
+  unset LITE_WORKTREE
   run _run_guard 'git checkout some-branch'
   [ "$status" -eq 0 ]
 }

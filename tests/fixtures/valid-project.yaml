@@ -1,0 +1,23 @@
+version: 1
+
+env:
+  ports: { base: 4000, stride: 10 }
+  tmp: .harness/run/{run_id}
+  vars:
+    DATABASE_NAME: test_{run_id}
+
+gates:
+  - { id: typecheck, run: "npx tsc --noEmit" }
+  - { id: target_test, run: "npx vitest run {file} -t {name}", per_criterion: true }
+  - { id: full_suite, run: "npx vitest run" }
+  - { id: diff_coverage, run: "npx c8 report --reporter=text-summary", record_only: true }
+
+protected_paths:
+  - ".github/**"
+  - "package-lock.json"
+  - ".harness/**"
+
+pr:
+  base: main
+  branch_prefix: "agent/"
+  size_soft_limit: 10

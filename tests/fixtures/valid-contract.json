@@ -1,0 +1,39 @@
+{
+  "id": "WC-0001",
+  "title": "Reject board exports with an unknown column",
+  "target": "harness-factory-map",
+  "scope": {
+    "include": ["src/board/**"],
+    "exclude": ["src/board/legacy/**"]
+  },
+  "constraints": ["no new runtime dependencies"],
+  "acceptance": [
+    {
+      "id": "AC-01",
+      "text": "An export naming a column the schema does not define is rejected",
+      "verification": "executable_test",
+      "targetTest": { "file": "tests/board/export.test.ts", "name": "rejects unknown columns" }
+    },
+    {
+      "id": "AC-02",
+      "text": "The rejection message names the offending column",
+      "verification": "executable_test",
+      "targetTest": { "file": "tests/board/export.test.ts", "name": "names the offending column" }
+    }
+  ],
+  "context": [
+    {
+      "uri": "specs/board-export.md",
+      "contentSha": "b5bb9d8014a0f9b1d61e21e796d78dccdf1352f23cd32812f4850b878ae4944c",
+      "why": "defines the column set an export may name"
+    }
+  ],
+  "authority": {
+    "allowed": ["edit board export code", "add tests"],
+    "requiresHuman": [],
+    "automationLevel": "agent-with-review"
+  },
+  "irreversibility": "refactor",
+  "risk": "low",
+  "dependsOn": []
+}
