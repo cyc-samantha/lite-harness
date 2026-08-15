@@ -7,3 +7,9 @@
 # Session-id+pid lock files (e.g. scheduled_tasks.lock convention) — never
 # committed by accident.
 /.claude/*.lock
+
+# Node toolchain
+node_modules/
+
+# Per-run engine state (never committed)
+run/
