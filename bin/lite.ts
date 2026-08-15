@@ -31,10 +31,14 @@ import type { WorkContract, WorkSource } from '../ports/work-source.ts';
 import { evidenceFrom } from '../engine/evidence.ts';
 import { runLadder, type LadderResult } from '../engine/gates.ts';
 import { preflight, type PreflightDeps } from '../engine/preflight.ts';
-import { changedPaths, createWorktree, shaOfPath, trackedFiles, type Repo } from '../engine/repo.ts';
+import { assemble, type RolePayload } from '../engine/prompt.ts';
+import { changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, type Repo } from '../engine/repo.ts';
 import { describeViolations, scopeViolations } from '../engine/scope-check.ts';
 import { canRun, shellRunner } from '../engine/shell.ts';
 import { advanced, hasReached, loadState, newRun, saveState, type RunState } from '../engine/state.ts';
+
+/** This harness's own install directory — where roles/ lives. */
+const HARNESS_ROOT = resolve(import.meta.dirname, '..');
 
 interface Settings {
   dataDir: string;
@@ -194,6 +198,77 @@ async function commandSubmit(runId: string): Promise<void> {
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
 }
 
+/**
+ * Stores the context pack.
+ *
+ * It arrives on stdin rather than being written to a file, because the run's state
+ * directory sits outside the worktree and the boundary guard — correctly — refuses
+ * writes there.
+ */
+async function commandPack(runId: string): Promise<void> {
+  const config = settings();
+  await loadRun(config, runId);
+  const chunks: Buffer[] = [];
+  for await (const chunk of process.stdin) chunks.push(chunk as Buffer);
+  const pack = Buffer.concat(chunks).toString('utf8').trim();
+  if (!pack) fail('the context pack is empty');
+  await writeFile(join(runDir(config, runId), 'pack.md'), `${pack}\n`, 'utf8');
+  process.stdout.write(`stored ${pack.split('\n').length} line(s)\n`);
+}
+
+async function payloadFor(config: Settings, runId: string, role: string): Promise<RolePayload> {
+  const state = await loadRun(config, runId);
+  const worktree = state.worktree ?? fail('this run has no worktree');
+  if (role === 'context-packer') return { role, repoRoot: config.targetRoot };
+  if (role === 'implementer') return implementerPayload(config, runId, worktree);
+  if (role === 'reviewer') return reviewerPayload(config, runId, worktree);
+  fail(`unknown role: ${role}`);
+}
+
+async function implementerPayload(config: Settings, runId: string, worktree: string): Promise<RolePayload> {
+  const contextPack = await readFile(join(runDir(config, runId), 'pack.md'), 'utf8').catch(() =>
+    fail('no context pack stored yet — run `pack` first'),
+  );
+  const ladder = await readFile(join(runDir(config, runId), 'ladder.json'), 'utf8').catch(() => '');
+  const failure = ladder ? (JSON.parse(ladder) as LadderResult) : undefined;
+  const red = failure && !failure.passed ? failure.outcomes.at(-1) : undefined;
+  const base = { role: 'implementer' as const, worktree, contextPack };
+  return red ? { ...base, gateFailure: `${red.gateId}: ${red.output}` } : base;
+}
+
+/**
+ * The reviewer's diff is computed here rather than passed in. Handing the caller
+ * that job would mean the caller could hand over something else instead.
+ */
+async function reviewerPayload(config: Settings, runId: string, worktree: string): Promise<RolePayload> {
+  const project = await projectConfig(config.targetRoot);
+  const repo: Repo = { root: config.targetRoot, runner: shellRunner };
+  return { role: 'reviewer', diff: await diffAgainst(repo, worktree, project.pr.base) };
+}
+
+/**
+ * Prints a role's prompt, fully assembled.
+ *
+ * The orchestrator calls this instead of composing a prompt itself. That is what
+ * makes the slot order and the per-role limits hold in practice rather than in a
+ * document nobody rereads.
+ */
+async function commandPrompt(argument: string): Promise<void> {
+  const [runId, role] = argument.split(':');
+  if (!runId || !role) fail('usage: prompt <runId>:<context-packer|implementer|reviewer>');
+  const config = settings();
+  const roleText = await readFile(join(HARNESS_ROOT, 'roles', `${role}.md`), 'utf8').catch(() =>
+    fail(`no role definition for ${role}`),
+  );
+  const assembled = assemble({
+    project: await projectConfig(config.targetRoot),
+    contract: await contractOf(config, runId),
+    roleText,
+    payload: await payloadFor(config, runId, role),
+  });
+  process.stdout.write(assembled.text);
+}
+
 /** Forwards the local audit trail upstream, where a supervisor can read it. */
 async function commandReport(runId: string): Promise<void> {
   const config = settings();
@@ -213,6 +288,8 @@ const COMMANDS: Record<string, (argument: string) => Promise<void>> = {
   gates: commandGates,
   scope: commandScope,
   submit: commandSubmit,
+  pack: commandPack,
+  prompt: commandPrompt,
   report: commandReport,
 };
 
