@@ -16,10 +16,14 @@ export interface Repo {
   runner: CommandRunner;
 }
 
-async function git(repo: Repo, args: string, cwd = repo.root): Promise<string> {
+async function gitRaw(repo: Repo, args: string, cwd = repo.root): Promise<string> {
   const result = await repo.runner.run(`git ${args}`, { cwd });
   if (result.exitCode !== 0) throw new Error(`git ${args} failed: ${result.output}`);
-  return result.output.trim();
+  return result.output;
+}
+
+async function git(repo: Repo, args: string, cwd = repo.root): Promise<string> {
+  return (await gitRaw(repo, args, cwd)).trim();
 }
 
 export async function trackedFiles(repo: Repo): Promise<string[]> {
@@ -82,11 +86,25 @@ function q(value: string): string {
   return `'${value.replaceAll("'", `'\\''`)}'`;
 }
 
+/**
+ * The path in one `git status --porcelain` line.
+ *
+ * The first two columns are the index and worktree status and either may be a
+ * space, so the path starts at column three and the leading whitespace is
+ * significant — which is why this reads unmodified output rather than trimmed
+ * output. A rename is reported as `old -> new`; the run changed the new one.
+ */
+function porcelainPath(line: string): string {
+  const path = line.slice(3).trim();
+  const renamed = path.split(' -> ');
+  return (renamed.at(-1) ?? path).trim();
+}
+
 /** Paths the run has touched, committed or not, relative to the worktree. */
 export async function changedPaths(repo: Repo, worktree: string, base: string): Promise<string[]> {
   const committed = await git(repo, `diff --name-only ${q(base)}...HEAD`, worktree);
-  const pending = await git(repo, 'status --porcelain', worktree);
-  const working = pending.split('\n').map((line) => line.slice(3).trim());
+  const pending = await gitRaw(repo, 'status --porcelain', worktree);
+  const working = pending.split('\n').filter((line) => line.length > 3).map(porcelainPath);
   const all = [...committed.split('\n'), ...working].filter((path) => path.length > 0);
   return [...new Set(all)];
 }
