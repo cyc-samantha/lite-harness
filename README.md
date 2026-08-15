@@ -20,10 +20,42 @@ If this ever takes four, something project-specific has leaked into the engine.
 
 1. Install this plugin.
 2. Add `.harness/project.yaml` to the target repository — see
-   `examples/factory-map.project.yaml`.
-3. Point at a work source: `LITE_SOURCE_URL`.
+   `examples/factory-map.project.yaml`. It lives there, not here, so it is
+   reviewed and rolled back alongside the code it describes.
+3. Set the environment below.
 
 Then `/run <contract-id>`.
+
+| Variable | Meaning | Default |
+|---|---|---|
+| `LITE_TARGET` | The repository being worked on | the current directory |
+| `LITE_SOURCE_URL` | Base URL of the work source | `http://127.0.0.1:8787` |
+| `LITE_DATA` | Where run state and worktrees live | `~/.claude/lite` |
+| `LITE_AGENT` | Name recorded on the claim | `lite-harness` |
+
+`LITE_TARGET` defaults to the current directory, which is almost never what you
+want — unset, a run claims work and then looks for gates in whatever repository
+you happened to be standing in.
+
+## A run, end to end
+
+`skills/run/SKILL.md` is the orchestrator's copy of this. Each subcommand is safe
+to run twice: a run is resumed, not restarted.
+
+| | Command | What it decides |
+|---|---|---|
+| 1 | `start <contract-id>` | Claims the work, runs the eight admission checks, prepares the worktree |
+| 2 | `prompt <runId>:context-packer` → `pack <runId>` | Which files matter, stored for the implementer |
+| 3 | `prompt <runId>:implementer` | The change itself, inside the worktree |
+| 4 | `gates <runId>` | Exit 2 means a rung went red; the output goes back to the same implementer |
+| 5 | `scope <runId>` | Exit 2 means the change left the contract's boundary |
+| 6 | `prompt <runId>:reviewer` | A second reading, against the contract and nothing else |
+| 7 | `report <runId>` | Forwards the audit trail upstream |
+| 8 | `submit <runId>` | Evidence to the work source, which returns the verdict |
+
+Steps 1, 4, 5 and 8 are decisions a machine can be held to. The rest are
+judgements. Nothing in the first group asks a model, and nothing in the second
+returns a verdict.
 
 ## Layout
 
@@ -35,6 +67,8 @@ Then `/run <contract-id>`.
 | `bin/` | The composition root | The only file that knows both sides |
 | `roles/` | Three prompts | No repository facts |
 | `hooks/` | Four guards | Path-based, never role-based |
+| `skills/run/` | The orchestrator's sequence | Coordinates; writes nothing |
+| `rules/core.md` | What every spawn is told | Under budget, or the build fails |
 
 ## The eight admission checks
 
@@ -59,6 +93,20 @@ routed around until it means nothing.
 The rung that matters most runs the test the contract named for each criterion.
 Its exit code becomes that criterion's evidence, which is what takes the verdict
 out of the model's hands.
+
+## The guards
+
+Four hooks, all keyed on paths rather than on which role is acting — a guard that
+asks who is calling can be talked out of its answer.
+
+They are **run-scoped**: enforcement begins when the engine exports
+`LITE_WORKTREE` and is dormant otherwise, because a guard that blocks ordinary
+interactive git in every project it is installed in gets uninstalled. Once a run
+is in flight, every undecidable case blocks.
+
+`LITE_GUARDS=off` disables all of them. It exists for debugging the harness
+itself; the orchestrator must never export it, and a run that needed it was
+telling you something.
 
 ## Prompts are assembled, never written
 
@@ -90,12 +138,23 @@ A budget nobody can fail is a wish. These fail the build.
 ## Development
 
 ```bash
-npm run check      # typecheck + unit tests
-bats tests/shell/  # the hooks
+npm run check      # typecheck + 56 unit tests
+bats tests/shell/  # 58 hook tests
 ```
+
+`.ts` files run directly under Node's type stripping — no build step. Conventions
+for working on this repository are in `CLAUDE.md`.
 
 ## Status
 
-Slice 1: one contract, one run, start to submitted. Not yet built: concurrent
-runs, the merge queue, risk-routed review, the failure decision table, and
-retry budgets. See the design spec for what each of those is waiting on.
+Slice 1: one contract, one run, start to submitted.
+
+Verified against real execution: admission refusals, the gate ladder including
+shell quoting, scope violations, evidence from exit codes, prompt assembly and
+the reviewer's isolation. The guards have shell tests but have not yet been
+exercised by a full run, and resume-after-crash is tested only at the unit level.
+
+Not yet built: concurrent runs and the merge queue that would make them safe,
+risk-routed review, the failure decision table, and retry budgets — the last of
+which needs two separate caps, since retrying a red gate within a run and
+retrying the run itself fail for different reasons.
