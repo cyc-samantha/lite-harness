@@ -37,6 +37,9 @@ function runnerThatFails(failOn: (command: string) => boolean): RecordingRunner 
 
 const CONTEXT = { cwd: '/nowhere', runId: 'run-1', env: {} };
 
+/** Stands in for the digest of the world these runs executed in. */
+const BASIS = 'b45150000000';
+
 /** The named tests are present unless a test is specifically about them missing. */
 const testsExist = (): boolean => true;
 
@@ -82,21 +85,33 @@ describe('the gate ladder', () => {
 describe('evidence', () => {
   it('reports the exit code of the named test, not an account of the work', async () => {
     const { result } = await ladderWith((command) => command.includes('names the offending column'));
-    const evidence = evidenceFrom(validContract(), result, testsExist);
+    const evidence = evidenceFrom({ contract: validContract(), ladder: result, locate: testsExist, envelopeSha: BASIS });
     expect(evidence.find((entry) => entry.acId === 'AC-02')?.passed).toBe(false);
   });
 
   it('gives every sealed criterion exactly one entry', async () => {
     const { result } = await ladderWith(() => false);
-    const evidence = evidenceFrom(validContract(), result, testsExist);
+    const evidence = evidenceFrom({ contract: validContract(), ladder: result, locate: testsExist, envelopeSha: BASIS });
     expect(evidence.map((entry) => entry.acId)).toEqual(['AC-01', 'AC-02']);
   });
 
   it('says so plainly when a criterion was never reached', async () => {
     const { result } = await ladderWith((command) => command.includes('tsc'));
-    const evidence = evidenceFrom(validContract(), result, testsExist);
+    const evidence = evidenceFrom({ contract: validContract(), ladder: result, locate: testsExist, envelopeSha: BASIS });
     expect(evidence.every((entry) => entry.passed === false)).toBe(true);
     expect(evidence[0]?.note).toContain('not evaluated');
+  });
+
+  it('stamps every entry with the world it was produced in', async () => {
+    const { result } = await ladderWith(() => false);
+    const evidence = evidenceFrom({ contract: validContract(), ladder: result, locate: testsExist, envelopeSha: BASIS });
+    expect(evidence.every((entry) => entry.envelopeSha === BASIS)).toBe(true);
+  });
+
+  it('refuses to produce evidence that cannot say what it ran against', async () => {
+    const { result } = await ladderWith(() => false);
+    const unstamped = { contract: validContract(), ladder: result, locate: testsExist, envelopeSha: '  ' };
+    expect(() => evidenceFrom(unstamped)).toThrow(/what it was executed against/);
   });
 
   it('defers a criterion a person owns instead of marking its own homework', async () => {
@@ -104,7 +119,7 @@ describe('evidence', () => {
     contract.acceptance[1]!.verification = 'rubric';
     delete contract.acceptance[1]!.targetTest;
     const { result } = await ladderWith(() => false);
-    const evidence = evidenceFrom(contract, result, testsExist);
+    const evidence = evidenceFrom({ contract, ladder: result, locate: testsExist, envelopeSha: BASIS });
     expect(evidence[1]?.note).toContain('deferred to human review');
   });
 });
@@ -160,14 +175,14 @@ describe('the run record', () => {
 describe('evidence a runner produced by matching nothing', () => {
   it('refuses to call a criterion passed when its named test does not exist', async () => {
     const { result } = await ladderWith(() => false);
-    const evidence = evidenceFrom(validContract(), result, () => false);
+    const evidence = evidenceFrom({ contract: validContract(), ladder: result, locate: () => false, envelopeSha: BASIS });
     expect(evidence.every((entry) => entry.passed)).toBe(false);
     expect(evidence[0]?.note).toContain('exited zero');
   });
 
   it('still reports a genuine failure as a failure, not as a missing test', async () => {
     const { result } = await ladderWith((command) => command.includes('names the offending column'));
-    const evidence = evidenceFrom(validContract(), result, () => false);
+    const evidence = evidenceFrom({ contract: validContract(), ladder: result, locate: () => false, envelopeSha: BASIS });
     expect(evidence.find((entry) => entry.acId === 'AC-02')?.note).toContain('failed with exit');
   });
 
@@ -176,6 +191,6 @@ describe('evidence a runner produced by matching nothing', () => {
     contract.acceptance[1]!.verification = 'human_review';
     delete contract.acceptance[1]!.targetTest;
     const { result } = await ladderWith(() => false);
-    expect(evidenceFrom(contract, result, () => false)[1]?.note).toContain('deferred');
+    expect(evidenceFrom({ contract, ladder: result, locate: () => false, envelopeSha: BASIS })[1]?.note).toContain('deferred');
   });
 });

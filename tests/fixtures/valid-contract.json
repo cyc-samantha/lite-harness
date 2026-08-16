@@ -35,5 +35,6 @@
   },
   "irreversibility": "refactor",
   "risk": "low",
-  "dependsOn": []
+  "dependsOn": [],
+  "blockingDecisions": []
 }

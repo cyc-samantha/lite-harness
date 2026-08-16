@@ -23,8 +23,26 @@ const wireCriterion = z
     text: nonBlank,
     verification: z.enum(['executable_test', 'deterministic_assertion', 'human_review', 'rubric']),
     target_test: z.object({ file: nonBlank, name: nonBlank }).optional(),
+    provenance: z.enum(['derived', 'human_authored', 'proposed']).optional(),
   })
   .passthrough();
+
+/**
+ * `answer` is optional because this source records answers in its own database
+ * rather than in the seal. Reading it when present is what lets that change
+ * without the engine changing too.
+ */
+const wireDecision = z
+  .object({
+    id: nonBlank,
+    question: nonBlank,
+    owner: nonBlank,
+    deferred: z.boolean(),
+    answer: nonBlank.optional(),
+  })
+  .passthrough();
+
+const wireSignature = z.object({ by: nonBlank, at: nonBlank }).passthrough();
 
 const wireContextRef = z
   .object({ uri: nonBlank, content_sha: nonBlank, why: nonBlank })
@@ -57,6 +75,8 @@ export const wireContractSchema = z
     irreversibility: z.enum(['refactor', 'migration', 'rewrite']),
     risk: z.enum(['low', 'medium', 'high', 'critical']),
     depends_on: z.array(z.string()).default([]),
+    blocking_decisions: z.array(wireDecision).default([]),
+    signature: wireSignature.optional(),
   })
   .passthrough();
 
@@ -64,7 +84,13 @@ export type WireContract = z.infer<typeof wireContractSchema>;
 
 function toCriterion(wire: WireContract['acceptance'][number]) {
   const base = { id: wire.id, text: wire.text, verification: wire.verification };
-  return wire.target_test ? { ...base, targetTest: { ...wire.target_test } } : base;
+  const provenanced = wire.provenance ? { ...base, provenance: wire.provenance } : base;
+  return wire.target_test ? { ...provenanced, targetTest: { ...wire.target_test } } : provenanced;
+}
+
+function toDecision(wire: WireContract['blocking_decisions'][number]) {
+  const base = { id: wire.id, question: wire.question, owner: wire.owner, deferred: wire.deferred };
+  return wire.answer ? { ...base, answer: wire.answer } : base;
 }
 
 export function toWorkContract(wire: WireContract): WorkContract {
@@ -84,6 +110,8 @@ export function toWorkContract(wire: WireContract): WorkContract {
     irreversibility: wire.irreversibility,
     risk: wire.risk,
     dependsOn: [...wire.depends_on],
+    blockingDecisions: wire.blocking_decisions.map(toDecision),
+    ...(wire.signature ? { signature: { by: wire.signature.by, at: wire.signature.at } } : {}),
   };
 }
 

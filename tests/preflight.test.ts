@@ -1,5 +1,5 @@
 /**
- * Eight rejection scenarios, one per admission check.
+ * One rejection scenario per admission check.
  *
  * Each starts from a baseline that passes, changes exactly one thing, and asserts
  * that the named check is the one that fires. The baseline test at the top is what
@@ -90,7 +90,7 @@ describe('admission checks', () => {
       contract.acceptance[1]!.verification = 'deterministic_assertion';
       delete contract.acceptance[1]!.targetTest;
     });
-    expect(checksIn(result)).toEqual(['capability_match']);
+    expect(checksIn(result)).toEqual(['unevidenceable_criterion']);
     expect(reasonsIn(result)).toContain('AC-02');
   });
 
@@ -140,6 +140,94 @@ describe('unevaluable input', () => {
     const loaded = loadProjectConfig({ version: 99, gates: [], pr: { base: 'main' } });
     expect(loaded.ok).toBe(false);
     expect(loaded.ok === false && loaded.problems[0]?.message).toContain('unsupported project.yaml version');
+  });
+});
+
+/**
+ * The three the seal can be read for but the engine cannot ask about. Each pairs
+ * a case where the contract says the thing is settled with one where it does not,
+ * because a check that refuses everything and a check that refuses the right
+ * thing are indistinguishable from the refusing side alone.
+ */
+describe('what the seal has to say for itself', () => {
+  it('refuses a criterion that is still a proposal rather than a requirement', async () => {
+    const result = await runWith((contract) => {
+      contract.acceptance[1]!.provenance = 'proposed';
+    });
+    expect(checksIn(result)).toEqual(['unaccepted_proposal']);
+    expect(reasonsIn(result)).toContain('AC-02');
+  });
+
+  it('admits a criterion a person authored', async () => {
+    await expect(
+      runWith((contract) => {
+        contract.acceptance[1]!.provenance = 'human_authored';
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it('refuses a blocking decision the seal does not record an answer to', async () => {
+    const result = await runWith((contract) => {
+      contract.blockingDecisions = [{ id: 'WC-9', question: 'which currency?', owner: 'ana', deferred: false }];
+    });
+    expect(checksIn(result)).toEqual(['unanswered_decision']);
+    expect(reasonsIn(result)).toContain('ana');
+  });
+
+  it('admits a decision somebody deliberately deferred', async () => {
+    await expect(
+      runWith((contract) => {
+        contract.blockingDecisions = [{ id: 'WC-9', question: 'which currency?', owner: 'ana', deferred: true }];
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it('admits a decision the seal carries the answer to', async () => {
+    await expect(
+      runWith((contract) => {
+        contract.blockingDecisions = [
+          { id: 'WC-9', question: 'which currency?', owner: 'ana', deferred: false, answer: 'GBP' },
+        ];
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it('treats a blank answer as no answer rather than as a resolution', async () => {
+    const result = await runWith((contract) => {
+      contract.blockingDecisions = [{ id: 'WC-9', question: 'q', owner: 'ana', deferred: false, answer: '   ' }];
+    });
+    expect(checksIn(result)).toEqual(['unanswered_decision']);
+  });
+
+  it('refuses unrecoverable work the seal carries no signature for', async () => {
+    const result = await runWith((contract) => {
+      contract.irreversibility = 'rewrite';
+    });
+    expect(checksIn(result)).toEqual(['missing_signature']);
+  });
+
+  it('refuses critical work the seal carries no signature for', async () => {
+    const result = await runWith((contract) => {
+      contract.risk = 'critical';
+    });
+    expect(checksIn(result)).toEqual(['missing_signature']);
+  });
+
+  it('admits unrecoverable work once the seal carries the signature', async () => {
+    await expect(
+      runWith((contract) => {
+        contract.irreversibility = 'rewrite';
+        contract.signature = { by: 'ana', at: '2026-08-16T00:00:00Z' };
+      }),
+    ).resolves.toEqual({ ok: true });
+  });
+
+  it('refuses a contract that never declared whether it has blocking decisions', async () => {
+    const result = await runWith((contract) => {
+      delete (contract as Partial<WorkContract>).blockingDecisions;
+    });
+    expect(checksIn(result)).toEqual(['contract_shape']);
+    expect(reasonsIn(result)).toContain('blockingDecisions');
   });
 });
 

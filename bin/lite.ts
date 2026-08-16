@@ -20,7 +20,7 @@
  * second `pr` call must not open a second pull request.
  */
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { parse } from 'yaml';
@@ -29,16 +29,19 @@ import { ticketSystemSource } from '../adapters/ticket-system/index.ts';
 import { loadProjectConfig, type ProjectConfig } from '../ports/project-capabilities.ts';
 import type { Checkpoint, WorkContract, WorkSource } from '../ports/work-source.ts';
 
+import { basisSha, sealBasis, type ExecutionBasis } from '../engine/envelope.ts';
+import { EXIT_CODE, routeDecision, routePreflight, type NextActor, type Routing } from '../engine/failure-class.ts';
 import { evidenceFrom, type TestLocator } from '../engine/evidence.ts';
-import { classify, errorSignature, type FailureAction, type Observation } from '../engine/failure-table.ts';
+import { classify, errorSignature, type Observation } from '../engine/failure-table.ts';
 import { runLadder, type GateOutcome, type LadderResult } from '../engine/gates.ts';
 import { renewLease } from '../engine/lease.ts';
 import { preflight, type PreflightDeps } from '../engine/preflight.ts';
+import { accountFor, afterAttempt, readSpend, runningTotal, type Spend } from '../engine/spend.ts';
 import { assemble, type RolePayload } from '../engine/prompt.ts';
-import { branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, worktreeFiles, type Repo } from '../engine/repo.ts';
+import { baseSha, branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, worktreeFiles, type Repo } from '../engine/repo.ts';
 import { describeViolations, scopeViolations } from '../engine/scope-check.ts';
 import { canRun, shellRunner } from '../engine/shell.ts';
-import { advanced, elapsedMinutes, hasReached, loadState, newRun, saveState, type RunState } from '../engine/state.ts';
+import { advanced, elapsedMinutes, hasReached, loadState, newRun, remembering, saveState, type RunState } from '../engine/state.ts';
 
 /** This harness's own install directory — where roles/ lives. */
 const HARNESS_ROOT = resolve(import.meta.dirname, '..');
@@ -68,6 +71,27 @@ function fail(message: string): never {
   process.stderr.write(`${message}\n`);
   process.exit(1);
 }
+
+/**
+ * Stops with the class as the exit code, and says the three things a reader
+ * needs in one screen: where it stopped, what came out, and who acts next.
+ *
+ * The reader is the engineer who wrote the spec, not the platform team. A
+ * category name alone sends them to ask somebody what it means.
+ */
+function stop(routing: Routing, where: string): never {
+  process.stderr.write(`\n${routing.failure_class} (${routing.failure_origin}) at ${where}\n\n`);
+  process.stderr.write(`${routing.reason}\n\n`);
+  process.stderr.write(`next: ${NEXT_STEP[routing.next_actor]}\n`);
+  process.exit(EXIT_CODE[routing.failure_class]);
+}
+
+const NEXT_STEP: Record<NextActor, string> = {
+  SPEC_AUTHOR: 'whoever wrote this spec — the contract has to change before a run can succeed',
+  SYSTEM: 'nobody. Fix it in place and run the gates again',
+  NAMED_HUMAN: 'a named person, to decide or to sign. This is not work waiting on work',
+  PLATFORM: 'the platform. Retrying will reproduce this exactly',
+};
 
 async function projectConfig(targetRoot: string): Promise<ProjectConfig> {
   const path = join(targetRoot, '.harness', 'project.yaml');
@@ -143,6 +167,32 @@ async function digestOf(path: string): Promise<string> {
   return bytes ? createHash('sha256').update(bytes).digest('hex').slice(0, 12) : 'absent';
 }
 
+/**
+ * SAFETY: unlike `digestOf`, an unreadable file here stops the run. A role stamp
+ * that reads `absent` is a slightly poorer audit trail; a basis that reads
+ * `absent` is a run claiming to know what it executed against when it does not.
+ */
+async function requiredDigest(path: string): Promise<string> {
+  const digest = await digestOf(path);
+  return digest === 'absent' ? fail(`cannot digest ${path}, so this run cannot record what it executed against`) : digest;
+}
+
+const CONFIG_PATH = ['.harness', 'project.yaml'] as const;
+
+/** Fixes the world at admission: the seal, the commit, the declarations, the engine. */
+async function observeBasis(config: Settings, repo: Repo, base: string, sealVersion: string): Promise<ExecutionBasis> {
+  return sealBasis({
+    contractSha: sealVersion,
+    baseRepoSha: await baseSha(repo, base).catch(() => fail(`cannot resolve ${base} in ${repo.root}`)),
+    projectConfigSha: await requiredDigest(join(config.targetRoot, ...CONFIG_PATH)),
+    harnessVersion: await harnessVersion(),
+  });
+}
+
+async function basisOf(config: Settings, runId: string): Promise<ExecutionBasis> {
+  return readArtifact<ExecutionBasis>(config, runId, 'basis.json');
+}
+
 async function harnessVersion(): Promise<string> {
   const raw = await readFile(join(HARNESS_ROOT, 'package.json'), 'utf8').catch(() => '{}');
   return (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
@@ -158,31 +208,33 @@ async function actorStamp(role: string, version: string): Promise<string> {
   return `${role}@${await digestOf(join(HARNESS_ROOT, 'roles', `${role}.md`))}`;
 }
 
+/** Everything a progress report needs to say who wrote it and from what world. */
+interface Reporter {
+  source: WorkSource;
+  config: Settings;
+  state: RunState;
+  basis: ExecutionBasis;
+}
+
 /**
- * Reports progress upstream with the six fields that make it answerable later.
+ * Reports progress upstream, stamped with the world the run is executing in.
  *
- * These cost six fields now and a replay of every run in history if they are
- * added afterwards. Nothing in this slice reads them back — the reason to write
- * them is that the question they answer ("which prompt, which config, which
- * model produced this?") can only be asked of runs that already recorded it.
+ * The basis is the expensive half to add late — every run already in the ledger
+ * would have to be replayed to acquire it, and the worlds they ran in are gone.
+ * `model_id` rides along beside it rather than inside it: the engine cannot
+ * observe which model is driving, so it is reported, not established, and it
+ * must not sit in a record whose whole claim is that it was observed.
  */
-async function sendCheckpoint(
-  source: WorkSource,
-  config: Settings,
-  state: RunState,
-  role: string,
-  checkpoint: Checkpoint,
-): Promise<void> {
-  const version = await harnessVersion();
+async function sendCheckpoint(to: Reporter, role: string, checkpoint: Checkpoint): Promise<void> {
   const telemetry = {
-    run_id: state.runId,
-    contract_id: state.contractId,
-    role: await actorStamp(role, version),
-    config_hash: await digestOf(join(config.targetRoot, '.harness', 'project.yaml')),
-    model_id: config.modelId,
-    harness_version: version,
+    run_id: to.state.runId,
+    contract_id: to.state.contractId,
+    role: await actorStamp(role, to.basis.harness_version),
+    model_id: to.config.modelId,
+    execution_basis: to.basis,
+    envelope_sha: basisSha(to.basis),
   };
-  await source.checkpoint(state.runId, { ...checkpoint, payload: { ...checkpoint.payload, ...telemetry } });
+  await to.source.checkpoint(to.state.runId, { ...checkpoint, payload: { ...checkpoint.payload, ...telemetry } });
 }
 
 /**
@@ -202,12 +254,23 @@ const RUN_ATTEMPT_LIMIT = 2;
  * attempts yet" would remove the limit exactly when the source is unhealthy,
  * which is when runs are most likely to be failing and being retried.
  */
-async function refuseExhaustedContract(source: WorkSource, contractId: string): Promise<void> {
+async function refuseExhaustedContract(config: Settings, source: WorkSource, contractId: string): Promise<Spend> {
   const spent = await source.attemptsSpent(contractId).catch((error: unknown) =>
     fail(`cannot count the attempts already spent on ${contractId}: ${error instanceof Error ? error.message : String(error)}`),
   );
-  if (spent < RUN_ATTEMPT_LIMIT) return;
-  fail(`${contractId} has already had ${spent} run(s) and the limit is ${RUN_ATTEMPT_LIMIT}. A third attempt at unchanged work is a person's decision, not this run's.`);
+  if (spent >= RUN_ATTEMPT_LIMIT) {
+    fail(`${contractId} has already had ${spent} run(s) and the limit is ${RUN_ATTEMPT_LIMIT}. A third attempt at unchanged work is a person's decision, not this run's.`);
+  }
+  const prior = await priorSpend(config, contractId);
+  // The count and the cost have to agree. Attempts the source knows about that
+  // this ledger cannot account for were paid for somewhere this run cannot see,
+  // and starting one anyway hands it a ceiling somebody else already spent.
+  try {
+    accountFor(spent, prior);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  return prior;
 }
 
 /**
@@ -220,7 +283,7 @@ async function commandStart(contractId: string): Promise<void> {
   const repo: Repo = { root: config.targetRoot, runner: shellRunner };
   const project = await projectConfig(config.targetRoot);
 
-  await refuseExhaustedContract(source, contractId);
+  const prior = await refuseExhaustedContract(config, source, contractId);
   // Losing a race to claim is an ordinary outcome of polling a shared queue, not
   // a crash. A stack trace here would tell an operator to debug the harness when
   // the correct response is to take the next contract.
@@ -231,22 +294,28 @@ async function commandStart(contractId: string): Promise<void> {
   await saveState(config.dataDir, state);
   await writeArtifact(config, claim.runId, 'contract.json', claim.contract);
 
+  const basis = await observeBasis(config, repo, project.pr.base, claim.sealVersion);
+  await writeArtifact(config, claim.runId, 'basis.json', basis);
+  const to: Reporter = { source, config, state, basis };
+
   const verdict = await preflight(claim.contract, project, preflightDeps(repo, source));
   if (!verdict.ok) {
-    await sendCheckpoint(source, config, state, ENGINE, {
+    const routing = routePreflight(verdict.failures);
+    await sendCheckpoint(to, ENGINE, {
       step: 'preflight_refused',
       summary: `admission refused: ${verdict.failures.length} problem(s)`,
-      payload: { failures: verdict.failures },
+      payload: { failures: verdict.failures, ...routing },
     });
+    await settleSpend(config, state, prior);
     await source.fail(claim.runId);
-    fail(verdict.failures.map((entry) => `  [${entry.check}] ${entry.reason}`).join('\n'));
+    stop(routing, 'admission');
   }
 
   const worktree = worktreeFor(config, claim.runId);
   const branch = branchName(project.pr.branch_prefix, contractId, claim.runId);
   await createWorktree(repo, { path: worktree, branch, base: project.pr.base });
   await saveState(config.dataDir, { ...advanced(state, 'admitted', now()), worktree, branch });
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint(to, ENGINE, {
     step: 'admitted',
     summary: 'admitted; worktree prepared',
     payload: { branch },
@@ -270,31 +339,97 @@ function ceiling(): { maxGateRuns: number; maxWallMinutes: number } {
   };
 }
 
+/**
+ * Where a contract's running total is kept.
+ *
+ * Not in the run directory: the whole point is that it outlives the run. The
+ * contract id is hashed rather than used as a path because ids carry colons and
+ * slashes, and a budget file that lands in the wrong directory is a budget that
+ * silently resets.
+ */
+function spendPath(config: Settings, contractId: string): string {
+  return join(config.dataDir, 'contract', createHash('sha256').update(contractId).digest('hex').slice(0, 16), 'spend.json');
+}
+
+/**
+ * Closes this attempt's entry in the contract's running total.
+ *
+ * Called on every way a run ends — refused at admission, escalated, submitted —
+ * because the source counts all three as attempts. An ending that forgot to
+ * record itself makes the next claim unaccountable, which is the correct
+ * failure but a needless one.
+ */
+async function settleSpend(config: Settings, state: RunState, prior: Spend): Promise<void> {
+  const current = { gateRuns: state.gateRuns, wallMinutes: elapsedMinutes(state, now()) };
+  await writeSpend(config, state.contractId, afterAttempt(prior, current));
+}
+
+async function priorSpend(config: Settings, contractId: string): Promise<Spend> {
+  const raw = await readFile(spendPath(config, contractId), 'utf8').catch(() => undefined);
+  try {
+    return readSpend(raw === undefined ? undefined : (JSON.parse(raw) as unknown));
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function writeSpend(config: Settings, contractId: string, spend: Spend): Promise<void> {
+  const path = spendPath(config, contractId);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(spend, null, 2)}\n`, 'utf8');
+}
+
+/**
+ * What the worktree currently looks like, as one comparable value.
+ *
+ * The diff itself is not kept — only whether this run has produced this shape
+ * before. Storing the patches would put the target repository's source into the
+ * harness's own data directory, which is neither this layer's to hold nor
+ * something anyone asked it to retain.
+ */
+async function diffDigest(repo: Repo, worktree: string, base: string): Promise<string> {
+  const patch = await diffAgainst(repo, worktree, base).catch(() => '');
+  return patch ? createHash('sha256').update(patch).digest('hex').slice(0, 16) : '';
+}
+
 /** Retries of this same gate, counting the red that just happened. */
 function attemptsOn(state: RunState, gateId: string): number {
   return state.lastRed?.gateId === gateId ? state.gateAttempts + 1 : 1;
 }
 
-function observe(state: RunState, red: GateOutcome, gateRuns: number): Observation {
+/** Everything the table needs that only this run knows. */
+interface Seen {
+  state: RunState;
+  red: GateOutcome;
+  gateRuns: number;
+  prior: Spend;
+  diffSignature: string;
+}
+
+function observe(seen: Seen): Observation {
+  const { state, red } = seen;
   const sameGate = state.lastRed?.gateId === red.gateId;
   return {
+    ...quiet(state, seen.gateRuns, seen.prior),
     redGate: { gateId: red.gateId, exitCode: red.exitCode, output: red.output },
     ...(sameGate && state.lastRed ? { previousSignature: state.lastRed.signature } : {}),
     attemptsOnThisGate: attemptsOn(state, red.gateId),
-    sealBroken: false,
-    scopeViolations: 0,
-    baseMoved: false,
-    budget: { gateRuns, wallMinutes: elapsedMinutes(state, now()), ...ceiling() },
+    diffSignature: seen.diffSignature,
+    earlierDiffs: state.diffSignatures,
   };
 }
 
-/**
- * A red rung the orchestrator should repair in place exits 2; anything it must
- * not simply retry exits 3. The distinction is the whole point of the table —
- * without it every failure looks like "try again", which is how a run spends its
- * budget discovering nothing.
- */
-const RETRYABLE: readonly FailureAction[] = ['retry', 'retry_in_place', 'rebase_and_retry'];
+/** The half of an observation that holds whether or not a rung went red. */
+function quiet(state: RunState, gateRuns: number, prior: Spend): Observation {
+  return {
+    attemptsOnThisGate: 0,
+    sealBroken: false,
+    scopeViolations: 0,
+    baseMoved: false,
+    freshRestarts: state.freshRestarts,
+    budget: { ...runningTotal(prior, { gateRuns, wallMinutes: elapsedMinutes(state, now()) }), ...ceiling() },
+  };
+}
 
 async function commandGates(runId: string): Promise<void> {
   const config = settings();
@@ -303,6 +438,10 @@ async function commandGates(runId: string): Promise<void> {
   const contract = await contractOf(config, runId);
   const project = await projectConfig(config.targetRoot);
   const worktree = state.worktree ?? fail('this run has no worktree');
+
+  const repo: Repo = { root: config.targetRoot, runner: shellRunner };
+  const prior = await priorSpend(config, state.contractId);
+  const diffSignature = await diffDigest(repo, worktree, project.pr.base);
 
   const ladder = await runLadder(contract, project, { cwd: worktree, runId, env: {} }, shellRunner);
   await writeArtifact(config, runId, 'ladder.json', ladder);
@@ -313,23 +452,35 @@ async function commandGates(runId: string): Promise<void> {
     await saveState(config.dataDir, { ...advanced(state, 'gates_passed', now()), gateRuns, gateAttempts: 0 });
     return;
   }
-  await reportRed(config, state, ladder, gateRuns);
+  await reportRed(config, { state, ladder, gateRuns, prior, diffSignature });
 }
 
-async function reportRed(config: Settings, state: RunState, ladder: LadderResult, gateRuns: number): Promise<void> {
+/** What one red ladder produced, kept together so the report reads one thing. */
+interface RedLadder {
+  state: RunState;
+  ladder: LadderResult;
+  gateRuns: number;
+  prior: Spend;
+  diffSignature: string;
+}
+
+async function reportRed(config: Settings, seen: RedLadder): Promise<void> {
+  const { state, ladder } = seen;
   const red = ladder.outcomes.at(-1) ?? fail('the ladder failed without a failing rung, which it cannot do');
-  const decision = classify(observe(state, red, gateRuns));
+  const decision = classify(observe({ ...seen, red }));
   await saveState(config.dataDir, {
     ...state,
-    gateRuns,
+    gateRuns: seen.gateRuns,
     gateAttempts: attemptsOn(state, red.gateId),
     lastRed: { gateId: red.gateId, signature: errorSignature(red.output) },
+    freshRestarts: state.freshRestarts + (decision.action === 'restart_fresh' ? 1 : 0),
+    diffSignatures: remembering(state, seen.diffSignature),
     updatedAt: now(),
   });
 
-  process.stdout.write(`\nstopped at ${ladder.stoppedAt}\n\n${red.output}\n`);
-  process.stdout.write(`\n${decision.category} → ${decision.action}\n${decision.why}\n`);
-  process.exit(RETRYABLE.includes(decision.action) ? 2 : 3);
+  process.stdout.write(`\n${red.output}\n`);
+  process.stdout.write(`\n${decision.category} → ${decision.action}\n`);
+  stop(routeDecision(decision), `gate "${ladder.stoppedAt ?? red.gateId}"`);
 }
 
 /**
@@ -352,11 +503,12 @@ async function commandEscalate(runId: string, extra: string[]): Promise<void> {
   const packet = await readStdin();
   if (!packet) fail('an escalation with no account of what happened is worth nothing — write the packet on stdin');
 
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
     step: amending ? 'amendment_proposed' : 'escalated',
     summary: packet.split('\n')[0]?.slice(0, 200) ?? 'escalated',
     payload: { packet, phase: state.phase, gate_runs: state.gateRuns, last_red: state.lastRed ?? null },
   });
+  await settleSpend(config, state, await priorSpend(config, state.contractId));
   await source.fail(runId);
   process.stdout.write(`${amending ? 'amendment proposed' : 'escalated'}; the work is back with its source\n`);
 }
@@ -377,8 +529,13 @@ async function commandScope(runId: string): Promise<void> {
     process.stdout.write(`${changed.length} file(s) changed, all inside scope\n`);
     return;
   }
-  process.stderr.write(`change left the contract's boundary:\n${describeViolations(violations).map((v) => `  ${v}`).join('\n')}\n`);
-  process.exit(2);
+  // A diff outside the boundary is not a red gate to fix and try again: widening
+  // a sealed scope is not this run's decision to make, so it routes as a stop.
+  // No rung failed, so none is invented — the observation says what happened.
+  const prior = await priorSpend(config, state.contractId);
+  const decision = classify({ ...quiet(state, state.gateRuns, prior), scopeViolations: violations.length });
+  process.stderr.write(`${describeViolations(violations).map((v) => `  ${v}`).join('\n')}\n`);
+  stop(routeDecision(decision), 'scope check');
 }
 
 async function commandSubmit(runId: string): Promise<void> {
@@ -393,8 +550,14 @@ async function commandSubmit(runId: string): Promise<void> {
   // to claim the work again — which is how finished work gets done twice.
   if (hasReached(state, 'submitted')) fail('this run has already submitted its evidence');
   await beat(source, runId);
-  const evidence = evidenceFrom(contract, ladder, await namedTests(config, state));
+  const evidence = evidenceFrom({
+    contract,
+    ladder,
+    locate: await namedTests(config, state),
+    envelopeSha: basisSha(await basisOf(config, runId)),
+  });
   const verdict = await source.submit(runId, evidence);
+  await settleSpend(config, state, await priorSpend(config, state.contractId));
   await saveState(config.dataDir, advanced(state, 'submitted', now()));
   await writeArtifact(config, runId, 'verdict.json', verdict);
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);
@@ -480,7 +643,7 @@ async function commandPr(runId: string, extra: string[]): Promise<void> {
   const files = await changedPaths(repo, worktree, project.pr.base);
 
   await saveState(config.dataDir, { ...advanced(state, 'pr_open', now()), prUrl: url });
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
     step: 'pr_opened',
     summary: `pull request open with ${files.length} file(s) changed`,
     payload: { url, branch: state.branch ?? '', files_changed: files },
@@ -578,7 +741,7 @@ async function commandReport(runId: string): Promise<void> {
   await beat(source, runId);
   const path = join(runDir(config, runId), 'audit.jsonl');
   const lines = (await readFile(path, 'utf8').catch(() => '')).split('\n').filter(Boolean);
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
     step: 'audit',
     summary: `${lines.length} tool call(s) recorded`,
     payload: { calls: lines.map((line) => JSON.parse(line) as unknown) },

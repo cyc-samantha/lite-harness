@@ -57,6 +57,17 @@ export async function shaOfPath(repo: Repo, relativePath: string): Promise<strin
   }
 }
 
+/**
+ * Which commit the run started from.
+ *
+ * Recorded at admission rather than read back later, because the point of it is
+ * to pin a moving reference: `main` in March and `main` in May are the same name
+ * and not the same world.
+ */
+export async function baseSha(repo: Repo, base: string): Promise<string> {
+  return git(repo, `rev-parse ${q(base)}`);
+}
+
 export interface WorktreeRequest {
   path: string;
   branch: string;

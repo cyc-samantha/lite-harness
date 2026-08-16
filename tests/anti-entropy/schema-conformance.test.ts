@@ -25,7 +25,7 @@ const WIRE_CONTRACT = {
       text: 'it holds',
       verification: 'executable_test',
       target_test: { file: 'tests/x.test.ts', name: 'holds' },
-      provenance: 'authored',
+      provenance: 'human_authored',
       source_ref: 'specs/x.md#L1',
     },
   ],

@@ -34,11 +34,47 @@ export interface TargetTest {
   name: string;
 }
 
+/**
+ * Where a criterion came from. `proposed` was suggested by a system and is not
+ * yet anyone's requirement — a run that implements one is building something
+ * nobody asked for, persuasively.
+ */
+export type Provenance = 'derived' | 'human_authored' | 'proposed';
+
 export interface AcceptanceCriterion {
   id: string;
   text: string;
   verification: VerificationMechanism;
   targetTest?: TargetTest;
+  /** Absent when the source does not distinguish. Only `proposed` stops a run. */
+  provenance?: Provenance;
+}
+
+/**
+ * A question this work waits on.
+ *
+ * Decisions are not tasks and must never share a queue with them: an agent
+ * handed an unanswered one does not stop, it picks an answer, and that answer
+ * becomes policy without anybody choosing it. `deferred` is the opposite and
+ * equally deliberate judgement — the question is open, a named person knows it
+ * is open, and work may proceed anyway.
+ *
+ * `answer` is what makes the resolution auditable. A source that records answers
+ * somewhere other than the seal leaves this unset, and a run cannot confirm from
+ * a sealed document alone that anybody answered.
+ */
+export interface BlockingDecision {
+  id: string;
+  question: string;
+  owner: string;
+  deferred: boolean;
+  answer?: string;
+}
+
+/** A named human's counter-signature, as carried by the seal itself. */
+export interface Signature {
+  by: string;
+  at: string;
 }
 
 /**
@@ -77,12 +113,32 @@ export interface WorkContract {
   irreversibility: Irreversibility;
   risk: Risk;
   dependsOn: string[];
+  blockingDecisions: BlockingDecision[];
+  signature?: Signature;
 }
 
-/** One criterion's result, as observed by the run. */
+/**
+ * Work whose shape cannot be recovered by a migration, or whose blast radius is
+ * critical, is signed by a named human before an agent implements it. Catching
+ * it at review is too late — review rejects an implementation, but the cost is
+ * already paid by everyone who built against the wrong shape.
+ */
+export function needsSignature(contract: WorkContract): boolean {
+  return contract.irreversibility === 'rewrite' || contract.risk === 'critical';
+}
+
+/**
+ * One criterion's result, as observed by the run.
+ *
+ * `envelopeSha` points back at the execution basis this result was produced on.
+ * Without it a green result and a later red one on the same sealed contract are
+ * indistinguishable from a flaky test, when the actual difference may be that
+ * the base branch moved or the gate commands were edited underneath.
+ */
 export interface Evidence {
   acId: string;
   passed: boolean;
+  envelopeSha: string;
   note?: string;
 }
 
@@ -95,6 +151,8 @@ export interface Checkpoint {
 
 export interface Claim {
   runId: string;
+  /** Which sealed version of the contract this run was handed. */
+  sealVersion: string;
   contract: WorkContract;
 }
 

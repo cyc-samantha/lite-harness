@@ -57,6 +57,25 @@ export interface RunState {
   /** Every rung this run has executed, which is what the ceiling counts. */
   gateRuns: number;
   lastRed?: LastRed;
+  /** How often this run has thrown its context away and started over. */
+  freshRestarts: number;
+  /** Digests of the diffs this run has produced, so a repair that undoes another is visible. */
+  diffSignatures: string[];
+}
+
+/**
+ * How far back a run looks for a diff it has already produced.
+ *
+ * Bounded because the record is written on every gate run and read on every
+ * comparison, and because a repair that reproduces something from twenty
+ * attempts ago is not oscillation — it is a run that should have stopped long
+ * before on some other rule.
+ */
+const DIFF_MEMORY = 6;
+
+export function remembering(state: RunState, signature: string): string[] {
+  if (!signature.trim()) return state.diffSignatures;
+  return [...state.diffSignatures, signature].slice(-DIFF_MEMORY);
 }
 
 export function statePath(dataDir: string, runId: string): string {
@@ -64,7 +83,17 @@ export function statePath(dataDir: string, runId: string): string {
 }
 
 export function newRun(runId: string, contractId: string, now: string): RunState {
-  return { runId, contractId, phase: 'claimed', startedAt: now, updatedAt: now, gateAttempts: 0, gateRuns: 0 };
+  return {
+    runId,
+    contractId,
+    phase: 'claimed',
+    startedAt: now,
+    updatedAt: now,
+    gateAttempts: 0,
+    gateRuns: 0,
+    freshRestarts: 0,
+    diffSignatures: [],
+  };
 }
 
 /** Minutes since the run was claimed, which is half of what the ceiling watches. */

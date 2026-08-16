@@ -14,6 +14,12 @@ import type { AcceptanceCriterion, Evidence, WorkContract } from '../ports/work-
 
 import type { GateOutcome, LadderResult } from './gates.ts';
 
+/**
+ * What the ladder observed about one criterion, before it is stamped with the
+ * world it was observed in. Nothing leaves this file in this shape.
+ */
+type Finding = Omit<Evidence, 'envelopeSha'>;
+
 const HUMAN_OWNED = new Set(['human_review', 'rubric']);
 
 function outcomeFor(criterionId: string, outcomes: GateOutcome[]): GateOutcome | undefined {
@@ -25,7 +31,7 @@ function outcomeFor(criterionId: string, outcomes: GateOutcome[]): GateOutcome |
  * engine's to set — the work source sets those aside for human review whatever
  * this says. The note is what a reviewer reads.
  */
-function deferred(criterion: AcceptanceCriterion): Evidence {
+function deferred(criterion: AcceptanceCriterion): Finding {
   return {
     acId: criterion.id,
     passed: true,
@@ -33,7 +39,7 @@ function deferred(criterion: AcceptanceCriterion): Evidence {
   };
 }
 
-function notReached(criterion: AcceptanceCriterion, stoppedAt: string | undefined): Evidence {
+function notReached(criterion: AcceptanceCriterion, stoppedAt: string | undefined): Finding {
   const where = stoppedAt ? `the ladder stopped at ${stoppedAt}` : 'the ladder did not run';
   return { acId: criterion.id, passed: false, note: `not evaluated: ${where}` };
 }
@@ -46,7 +52,7 @@ function notReached(criterion: AcceptanceCriterion, stoppedAt: string | undefine
  * produces a passing exit code and evidence that a person would act on. An exit
  * code cannot be persuaded, but it can be asked the wrong question.
  */
-function vacuous(criterion: AcceptanceCriterion): Evidence {
+function vacuous(criterion: AcceptanceCriterion): Finding {
   return {
     acId: criterion.id,
     passed: false,
@@ -54,7 +60,7 @@ function vacuous(criterion: AcceptanceCriterion): Evidence {
   };
 }
 
-function fromOutcome(criterion: AcceptanceCriterion, outcome: GateOutcome, exists: boolean): Evidence {
+function fromOutcome(criterion: AcceptanceCriterion, outcome: GateOutcome, exists: boolean): Finding {
   if (outcome.passed && !exists) return vacuous(criterion);
   const verdict = outcome.passed ? 'passed' : `failed with exit ${outcome.exitCode}`;
   return {
@@ -67,13 +73,30 @@ function fromOutcome(criterion: AcceptanceCriterion, outcome: GateOutcome, exist
 /** Whether the test a criterion names could be found in the run's worktree. */
 export type TestLocator = (criterion: AcceptanceCriterion) => boolean;
 
-function evidenceFor(criterion: AcceptanceCriterion, ladder: LadderResult, locate: TestLocator): Evidence {
+function evidenceFor(criterion: AcceptanceCriterion, ladder: LadderResult, locate: TestLocator): Finding {
   if (HUMAN_OWNED.has(criterion.verification)) return deferred(criterion);
   const outcome = outcomeFor(criterion.id, ladder.outcomes);
   if (!outcome) return notReached(criterion, ladder.stoppedAt);
   return fromOutcome(criterion, outcome, locate(criterion));
 }
 
-export function evidenceFrom(contract: WorkContract, ladder: LadderResult, locate: TestLocator): Evidence[] {
-  return contract.acceptance.map((criterion) => evidenceFor(criterion, ladder, locate));
+/** Everything one run of the ladder proved, and the world it proved it in. */
+export interface EvidenceRequest {
+  contract: WorkContract;
+  ladder: LadderResult;
+  locate: TestLocator;
+  envelopeSha: string;
+}
+
+/**
+ * SAFETY: evidence with no basis on it is refused rather than submitted
+ * unstamped. Adjudication treats what arrives as the record, and a record that
+ * cannot say which world produced it makes every later comparison — this
+ * criterion passed in March and fails now — unanswerable. There is no migration
+ * back: the world it ran in is gone by the time anyone notices the gap.
+ */
+export function evidenceFrom(request: EvidenceRequest): Evidence[] {
+  const { contract, ladder, locate, envelopeSha } = request;
+  if (!envelopeSha.trim()) throw new Error('refusing to produce evidence that cannot say what it was executed against');
+  return contract.acceptance.map((criterion) => ({ ...evidenceFor(criterion, ladder, locate), envelopeSha }));
 }
