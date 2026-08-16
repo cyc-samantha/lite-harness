@@ -126,3 +126,23 @@ describe('the exit code a caller reads', () => {
     expect(Object.values(EXIT_CODE).every((code) => code > 1)).toBe(true);
   });
 });
+
+/**
+ * Found by running a real contract: both halves of the seal check used to route
+ * to the platform, so "a path in the contract does not exist" reached the wrong
+ * desk. They are two problems and the standard puts them in two classes.
+ */
+describe('the two ways a sealed reference goes wrong', () => {
+  const routeOf = (check: string) => routePreflight([{ check, reason: 'x' } as never]);
+
+  it('sends a reference that points at nothing back to the spec author', () => {
+    expect(routeOf('unresolvable_reference')).toMatchObject({
+      failure_class: 'SPEC_BLOCKED',
+      next_actor: 'SPEC_AUTHOR',
+    });
+  });
+
+  it('stops outright when material changed underneath an approval', () => {
+    expect(routeOf('seal_integrity').failure_class).toBe('HARD_STOP');
+  });
+});

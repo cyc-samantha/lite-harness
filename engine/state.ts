@@ -106,6 +106,21 @@ export function elapsedMinutes(state: RunState, now: string): number {
   return (current - started) / 60_000;
 }
 
+/**
+ * Where this layer's responsibility ends: a verified change candidate.
+ *
+ * Not a phase, because it is not an event anybody watched happen — it is the
+ * conjunction of four that were. Naming it matters more than storing it: without
+ * a name, "done" drifts towards merged, then deployed, and the layer acquires a
+ * merge queue, a release process and an incident channel it was built to avoid.
+ *
+ * What happens to the candidate — merging it, running CI on it, shipping it —
+ * belongs to whatever system takes it from here.
+ */
+export function readyForIntegration(state: RunState): boolean {
+  return hasReached(state, 'submitted') && state.prUrl !== undefined;
+}
+
 export function hasReached(state: RunState, phase: RunPhase): boolean {
   return RUN_PHASES.indexOf(state.phase) >= RUN_PHASES.indexOf(phase);
 }

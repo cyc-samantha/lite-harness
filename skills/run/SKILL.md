@@ -60,41 +60,31 @@ Then export, so the guards and the audit log know which run is in flight:
 export LITE_WORKTREE=<worktree> LITE_RUN_ID=<runId> LITE_RUN_DIR="$LITE_DATA/run/<runId>"
 ```
 
-### 2. Pack the context
+### 2. Implement
 
 **Never write a prompt yourself.** Ask for it:
-
-```bash
-node bin/lite.ts prompt <runId>:context-packer
-```
-
-Spawn a subagent with exactly that text. Keeping the slots in order is what lets
-the cache reuse them across every spawn in this run, and keeping each role's
-input to what its own payload allows is what stops the reviewer being told things
-it must not know. Composing your own prompt loses both.
-
-Store what the packer returns:
-
-```bash
-node bin/lite.ts pack <runId> <<'PACK'
-<the packer's file list>
-PACK
-```
-
-Do not read the repository yourself. Keeping that exploration out of your context
-is the point of the role.
-
-### 3. Implement
 
 ```bash
 node bin/lite.ts prompt <runId>:implementer
 ```
 
+Keeping the slots in order is what lets the cache reuse them across every spawn
+in this run, and keeping each role's input to what its own payload allows is what
+stops the reviewer being told things it must not know. Composing your own prompt
+loses both.
+
+The prompt already carries whatever the target repository wrote about itself in
+`AGENTS.md`. **Do not read the repository yourself**, and do not spawn a packer
+to read it for you — that step is off by default because paying a model to
+choose files rebuilds a document the repository has already written. If you find
+the implementer genuinely wasting turns hunting for files, say so; that is the
+measurement the step is waiting on.
+
 Spawn a subagent with that text. It works only inside the worktree — a hook
 enforces this, so a blocked write is the system working, not a problem to route
 around.
 
-### 4. Gates
+### 3. Gates
 
 ```bash
 node bin/lite.ts gates <runId>
@@ -150,7 +140,7 @@ else and not silently give up.
 
 Both forms hand the work back to its source. Neither is a failure of yours.
 
-### 5. Scope
+### 4. Scope
 
 ```bash
 node bin/lite.ts scope <runId>
@@ -160,7 +150,7 @@ A non-zero exit means the change left the contract's boundary. Do not widen the
 scope — you cannot amend a sealed contract. Either have the implementer bring the
 change back inside, or escalate.
 
-### 6. Review
+### 5. Review
 
 ```bash
 node bin/lite.ts prompt <runId>:reviewer
@@ -174,7 +164,7 @@ Withholding those is what makes the second reading independent.
 Findings go back to the implementer. When the reviewer says the diff is sound,
 continue.
 
-### 7. Open the pull request
+### 6. Open the pull request
 
 Commit inside the worktree, push the branch, and open a pull request against the
 base named in `project.yaml`. The description must contain:
@@ -193,7 +183,7 @@ node bin/lite.ts report <runId>
 `pr` refuses a second call. If it does, a pull request already exists for this
 run — find it rather than opening another.
 
-### 8. Submit
+### 7. Submit
 
 ```bash
 node bin/lite.ts submit <runId>
@@ -204,6 +194,11 @@ it is. `awaiting_human` is the normal outcome for a contract with criteria a
 person owns — it is not a failure, and the pull request is where that person
 looks.
 
+**That is where you stop.** What you produced is a verified change candidate.
+Merging it, running a release pipeline on it, and watching it in production
+belong to another system. A green ladder is not permission to merge, and an
+`accepted` verdict is not a deployment.
+
 ## When you are tempted
 
 - To re-plan because the contract seems wrong → **stop and say so.** Amending a
@@ -211,3 +206,5 @@ looks.
 - To weaken a test to get a gate green → never.
 - To report success without a fresh gate run → never. The exit codes are the
   claim; your account of the work is not.
+- To merge the branch because everything is green → **that is not this layer's
+  to do.** Hand over the candidate and stop.

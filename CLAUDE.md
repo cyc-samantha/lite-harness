@@ -29,7 +29,7 @@ budget on something no run needs. Putting run rules here means runs never see th
 ## Commands
 
 ```bash
-npm run check      # typecheck + 56 unit tests
+npm run check      # typecheck + 156 unit tests
 bats tests/shell/  # 58 hook tests
 ```
 

@@ -5,6 +5,7 @@
  * the first byte that differs:
  *
  *   1. project    identical for every call against a repository, ever
+ *                 (its declared gates, plus whatever the repo says about itself)
  *   2. contract   identical for every call within a run
  *   3. role       differs per role, small
  *   4. payload    differs per call
@@ -39,9 +40,36 @@ export type RolePayload =
 
 export interface PromptInputs {
   project: ProjectConfig;
+  /**
+   * What the target repository says about itself — conventions, module map,
+   * the places people get caught. Empty when the repository does not have one.
+   *
+   * It sits in slot 1 beside the project declaration because it shares that
+   * slot's property: one document per repository, identical across every call
+   * ever made against it, so the cache holds it once.
+   */
+  repoNotes: string;
   contract: WorkContract;
   roleText: string;
   payload: RolePayload;
+}
+
+/**
+ * How much of a repository's own notes a run will carry.
+ *
+ * Always-loaded text is paid for on every spawn and competes for attention with
+ * the contract. A repository whose notes exceed this has written a manual rather
+ * than an orientation, and the run is better served by the part that fits than
+ * by a truncation nobody noticed — so the excess is dropped loudly.
+ */
+export const REPO_NOTES_LIMIT_BYTES = 8_000;
+
+function renderRepoNotes(notes: string): string {
+  const trimmed = notes.trim();
+  if (!trimmed) return '';
+  if (Buffer.byteLength(trimmed, 'utf8') <= REPO_NOTES_LIMIT_BYTES) return `\n\n## How this codebase works\n\n${trimmed}`;
+  const kept = Buffer.from(trimmed, 'utf8').subarray(0, REPO_NOTES_LIMIT_BYTES).toString('utf8');
+  return `\n\n## How this codebase works\n\n${kept}\n\n[truncated at ${REPO_NOTES_LIMIT_BYTES} bytes — this repository's notes are over the budget]`;
 }
 
 export interface AssembledPrompt {
@@ -122,7 +150,8 @@ function renderImplementerPayload(payload: Extract<RolePayload, { role: 'impleme
 }
 
 export function assemble(inputs: PromptInputs): AssembledPrompt {
-  const sharedPrefix = `${renderProject(inputs.project)}\n\n${renderContract(inputs.contract)}`;
+  const slotOne = `${renderProject(inputs.project)}${renderRepoNotes(inputs.repoNotes)}`;
+  const sharedPrefix = `${slotOne}\n\n${renderContract(inputs.contract)}`;
   const text = `${sharedPrefix}\n\n${inputs.roleText.trim()}\n\n${renderPayload(inputs.payload)}\n`;
   return { sharedPrefix, text };
 }

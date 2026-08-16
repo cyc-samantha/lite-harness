@@ -38,6 +38,20 @@ export interface ExecutionBasis {
 }
 
 /**
+ * The basis, plus what the run was permitted to reach while executing on it.
+ *
+ * Kept beside the basis rather than inside it: the basis is six strings that
+ * hash to one field on every piece of evidence, and permissions are a document.
+ * `project_config_sha` already pins them — this carries them in readable form so
+ * that answering "what was this run allowed to do" does not require finding the
+ * version of a config file that no longer exists.
+ */
+export interface ExecutionEnvelope {
+  basis: ExecutionBasis;
+  permissions: unknown;
+}
+
+/**
  * Fixed order, because it is what makes the digest stable. Two objects carrying
  * the same basis must hash alike whatever order their keys were written in.
  */

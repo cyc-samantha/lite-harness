@@ -23,6 +23,7 @@ import { shapeProblems } from './contract-shape.ts';
 export type PreflightCheck =
   | 'contract_shape'
   | 'seal_integrity'
+  | 'unresolvable_reference'
   | 'authority'
   | 'dependencies'
   | 'unevidenceable_criterion'
@@ -56,10 +57,19 @@ function failure(check: PreflightCheck, reason: string): PreflightFailure {
   return { check, reason };
 }
 
+/**
+ * The two ways a sealed reference goes wrong are two different problems.
+ *
+ * A reference that does not resolve points at material that is not there — a
+ * path that moved, a file nobody wrote — and the person who can fix that is
+ * whoever wrote the contract. A reference that resolves to different bytes means
+ * something changed underneath an approval, which nobody can repair by editing
+ * the contract and which must not be executed around.
+ */
 async function checkSeal(contract: WorkContract, deps: PreflightDeps): Promise<PreflightFailure[]> {
   const checked = contract.context.map(async (ref) => {
     const actual = await deps.shaOf(ref.uri);
-    if (actual === undefined) return failure('seal_integrity', `${ref.uri} could not be resolved`);
+    if (actual === undefined) return failure('unresolvable_reference', `${ref.uri} could not be resolved`);
     if (actual !== ref.contentSha) return failure('seal_integrity', `${ref.uri} has changed since the contract was sealed`);
     return undefined;
   });

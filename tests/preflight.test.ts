@@ -120,7 +120,7 @@ describe('admission checks', () => {
 describe('unevaluable input', () => {
   it('refuses when a context reference cannot be resolved at all', async () => {
     const result = await runWith(undefined, { shaOf: async () => undefined });
-    expect(checksIn(result)).toEqual(['seal_integrity']);
+    expect(checksIn(result)).toEqual(['unresolvable_reference']);
     expect(reasonsIn(result)).toContain('could not be resolved');
   });
 

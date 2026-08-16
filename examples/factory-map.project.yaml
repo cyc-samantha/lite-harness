@@ -21,7 +21,7 @@
 # Every command below was run against that repository, in a fresh worktree with no
 # node_modules, before it was written down.
 
-version: 1
+version: 2
 
 env:
   ports: { base: 4300, stride: 10 }
@@ -58,6 +58,21 @@ gates:
   # change can typecheck cleanly and still fail to produce the map the app renders.
   - id: build
     run: "npm --prefix harness-factory-map run build"
+
+# What a run may reach beyond the files it may edit — a separate question from
+# which files it may change, and the one that matters when the change is small
+# and the effect is not. Everything omitted is denied.
+#
+# Recorded, not enforced: the filesystem and secret boundaries are enforced by
+# hooks, and the rest waits on a real sandbox. Writing it down now is what makes
+# it possible to answer later what a given run was permitted to do.
+permissions:
+  network_out: []          # this project's gates run offline once installed
+  database_read: []
+  database_write: []
+  secrets: []
+  infrastructure_mutation: false
+  production_access: false
 
 protected_paths:
   - ".github/**"

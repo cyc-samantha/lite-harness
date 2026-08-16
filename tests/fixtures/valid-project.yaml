@@ -1,4 +1,4 @@
-version: 1
+version: 2
 
 env:
   ports: { base: 4000, stride: 10 }
@@ -11,6 +11,12 @@ gates:
   - { id: target_test, run: "npx vitest run {file} -t {name}", per_criterion: true }
   - { id: full_suite, run: "npx vitest run" }
   - { id: diff_coverage, run: "npx c8 report --reporter=text-summary", record_only: true }
+
+# What a run may reach beyond the files it may edit. Declared, not enforced —
+# see ports/project-capabilities.ts. Everything omitted is denied.
+permissions:
+  network_out: []
+  secrets: []
 
 protected_paths:
   - ".github/**"
