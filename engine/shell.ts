@@ -5,8 +5,17 @@
  * here. Nothing interprets the output — a gate that passed is a process that
  * returned zero, which is the only claim about a codebase the engine makes
  * without asking a model.
+ *
+ * SAFETY: a command inherits `baseEnvironment` and whatever the caller states,
+ * never the ambient environment. This used to spread `process.env`, which handed
+ * every gate — and everything a gate spawns — every credential the operator had,
+ * while `permissions.secrets` sat in the project declaration granting none. The
+ * default is the whole control: a call site that passes no `env` now gets the
+ * floor rather than everything.
  */
 import { spawn } from 'node:child_process';
+
+import { baseEnvironment } from './environment.ts';
 
 export interface CommandResult {
   exitCode: number;
@@ -42,7 +51,7 @@ export const shellRunner: CommandRunner = {
     return new Promise((resolve) => {
       const child = spawn('bash', ['-c', command], {
         cwd: options.cwd,
-        env: { ...process.env, ...options.env },
+        env: { ...baseEnvironment(process.env), ...options.env },
         stdio: ['ignore', 'pipe', 'pipe'],
       });
       let collected = '';

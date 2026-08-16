@@ -47,6 +47,7 @@ export interface DepsOverrides {
   trackedFiles?: PreflightDeps['trackedFiles'];
   stateOf?: PreflightDeps['stateOf'];
   canRun?: PreflightDeps['canRun'];
+  secretPresent?: PreflightDeps['secretPresent'];
 }
 
 /** A world in which the baseline passes, so any failure is the test's own mutation. */
@@ -56,5 +57,6 @@ export function workingDeps(overrides: DepsOverrides = {}): PreflightDeps {
     trackedFiles: overrides.trackedFiles ?? (async () => TRACKED_FILES),
     stateOf: overrides.stateOf ?? (async (): Promise<WorkItemState> => 'done'),
     canRun: overrides.canRun ?? (async () => true),
+    secretPresent: overrides.secretPresent ?? ((): boolean => true),
   };
 }

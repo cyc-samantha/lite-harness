@@ -31,6 +31,7 @@ export type PreflightCheck =
   | 'scope_resolvable'
   | 'protected_path_conflict'
   | 'environment_ready'
+  | 'secret_unavailable'
   | 'unaccepted_proposal'
   | 'unanswered_decision'
   | 'missing_signature';
@@ -51,6 +52,8 @@ export interface PreflightDeps {
   stateOf(contractId: string): Promise<WorkItemState | undefined>;
   /** Whether a declared gate command could actually be executed. */
   canRun(command: string): Promise<boolean>;
+  /** Whether a name granted by `permissions.secrets` exists in the environment this run will spawn into. */
+  secretPresent(name: string): boolean;
 }
 
 function failure(check: PreflightCheck, reason: string): PreflightFailure {
@@ -174,6 +177,18 @@ function checkProtectedPaths(contract: WorkContract, project: ProjectConfig, fil
   );
 }
 
+/**
+ * A grant this machine cannot honour stops the run here rather than at the gate
+ * that needed it. Discovered later it arrives as an authentication error inside a
+ * test run, which reads like a defect in the change — and the repair loop will
+ * spend its whole budget in the wrong file before anyone reads the word "token".
+ */
+function checkSecrets(project: ProjectConfig, deps: PreflightDeps): PreflightFailure[] {
+  return project.permissions.secrets
+    .filter((name) => !deps.secretPresent(name))
+    .map((name) => failure('secret_unavailable', `permissions.secrets grants "${name}", which this machine does not export`));
+}
+
 async function checkEnvironment(project: ProjectConfig, deps: PreflightDeps): Promise<PreflightFailure[]> {
   const checked = project.gates.map(async (gate) => {
     if (await deps.canRun(gate.run)) return undefined;
@@ -212,6 +227,7 @@ export async function preflight(
     ...checkScopeResolves(contract, files),
     ...checkProtectedPaths(contract, project, files),
     ...(await checkEnvironment(project, deps)),
+    ...checkSecrets(project, deps),
   ];
   return failures.length === 0 ? { ok: true } : { ok: false, failures };
 }
