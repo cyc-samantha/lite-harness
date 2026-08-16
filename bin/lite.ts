@@ -93,6 +93,18 @@ const NEXT_STEP: Record<NextActor, string> = {
   PLATFORM: 'the platform. Retrying will reproduce this exactly',
 };
 
+/**
+ * What the target repository says about itself, if it says anything.
+ *
+ * Absent is a normal state, not a failure: a repository that has not written one
+ * is a repository whose runs carry less context, which is its own business. The
+ * filename is the ecosystem's convention rather than this harness's invention,
+ * which is the point — nobody should have to write a second one of these.
+ */
+async function repoNotes(targetRoot: string): Promise<string> {
+  return readFile(join(targetRoot, 'AGENTS.md'), 'utf8').catch(() => '');
+}
+
 async function projectConfig(targetRoot: string): Promise<ProjectConfig> {
   const path = join(targetRoot, '.harness', 'project.yaml');
   const raw = await readFile(path, 'utf8').catch(() => fail(`no project declaration at ${path}`));
@@ -156,9 +168,30 @@ const ENGINE = 'engine';
  * honestly promise: between two subcommands there is no process alive to beat
  * from. The refusal itself lives in `engine/lease.ts`, where a test can reach it.
  */
-async function beat(source: WorkSource, runId: string): Promise<void> {
-  await renewLease(source, runId).catch((error: unknown) =>
-    fail(`${error instanceof Error ? error.message : String(error)}\nThe work was requeued upstream. Claim it again rather than continuing.`),
+async function beat(config: Settings, source: WorkSource, runId: string): Promise<void> {
+  await renewLease(source, runId).catch((error: unknown) => cancelled(config, runId, error));
+}
+
+/**
+ * The run no longer holds its work, so it stops here rather than reporting it.
+ *
+ * Nothing is sent upstream: this run cannot post to a run it does not hold, and
+ * a checkpoint written by a former holder is exactly the kind of record that
+ * makes a ledger untrustworthy. The worktree stays — a cancelled run's
+ * half-finished change is usually the most useful thing left of it, and deleting
+ * it is not something the layer can undo for whoever asks later.
+ */
+function cancelled(config: Settings, runId: string, error: unknown): never {
+  const why = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`\nworktree left in place at ${worktreeFor(config, runId)}\n`);
+  stop(
+    {
+      failure_class: 'RETRYABLE',
+      failure_origin: 'EXTERNAL',
+      reason: `${why}\nThe work was taken back — requeued, cancelled, or its authorisation revoked.`,
+      next_actor: 'SYSTEM',
+    },
+    'the safe point between two commands',
   );
 }
 
@@ -434,7 +467,7 @@ function quiet(state: RunState, gateRuns: number, prior: Spend): Observation {
 async function commandGates(runId: string): Promise<void> {
   const config = settings();
   const state = await loadRun(config, runId);
-  await beat(ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
+  await beat(config, ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
   const contract = await contractOf(config, runId);
   const project = await projectConfig(config.targetRoot);
   const worktree = state.worktree ?? fail('this run has no worktree');
@@ -516,7 +549,7 @@ async function commandEscalate(runId: string, extra: string[]): Promise<void> {
 async function commandScope(runId: string): Promise<void> {
   const config = settings();
   const state = await loadRun(config, runId);
-  await beat(ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
+  await beat(config, ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
   const contract = await contractOf(config, runId);
   const project = await projectConfig(config.targetRoot);
   const repo: Repo = { root: config.targetRoot, runner: shellRunner };
@@ -549,7 +582,7 @@ async function commandSubmit(runId: string): Promise<void> {
   // lease, so a replayed submit would otherwise be told its lease had lapsed and
   // to claim the work again — which is how finished work gets done twice.
   if (hasReached(state, 'submitted')) fail('this run has already submitted its evidence');
-  await beat(source, runId);
+  await beat(config, source, runId);
   const evidence = evidenceFrom({
     contract,
     ladder,
@@ -597,7 +630,7 @@ async function namedTests(config: Settings, state: RunState): Promise<TestLocato
 async function commandPack(runId: string): Promise<void> {
   const config = settings();
   const state = await loadRun(config, runId);
-  await beat(ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
+  await beat(config, ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
   const pack = await readStdin();
   if (!pack) fail('the context pack is empty');
   await writeFile(join(runDir(config, runId), 'pack.md'), `${pack}\n`, 'utf8');
@@ -616,7 +649,7 @@ async function commandPack(runId: string): Promise<void> {
 async function commandBeat(runId: string): Promise<void> {
   const config = settings();
   const state = await loadRun(config, runId);
-  await beat(ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
+  await beat(config, ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
   process.stdout.write(`lease renewed for ${state.contractId} (phase: ${state.phase})\n`);
 }
 
@@ -635,7 +668,7 @@ async function commandPr(runId: string, extra: string[]): Promise<void> {
   // Asked of the local record before the network, so the answer to "has this
   // already happened" never depends on the run still being live.
   if (hasReached(state, 'pr_open')) fail(`this run already recorded a pull request: ${state.prUrl ?? 'url not stored'}`);
-  await beat(source, runId);
+  await beat(config, source, runId);
 
   const project = await projectConfig(config.targetRoot);
   const repo: Repo = { root: config.targetRoot, runner: shellRunner };
@@ -688,10 +721,22 @@ async function splitterPayload(config: Settings, state: RunState, worktree: stri
   return { role: 'splitter', filesChanged: changed.length };
 }
 
+/**
+ * The context pack, when there is one.
+ *
+ * Sending a model to read a repository and choose files is paying tokens to
+ * rebuild what `AGENTS.md` and a docs index state directly — and that text is
+ * now in slot 1 of every prompt, where the cache holds it once for the whole
+ * run. So the pack is no longer required. It earns its place only once somebody
+ * has measured implementers wasting turns hunting for files; until then it is a
+ * model call per run buying a document the repository could have written.
+ */
+async function contextPackOf(config: Settings, runId: string): Promise<string> {
+  return readFile(join(runDir(config, runId), 'pack.md'), 'utf8').catch(() => '');
+}
+
 async function implementerPayload(config: Settings, runId: string, worktree: string): Promise<RolePayload> {
-  const contextPack = await readFile(join(runDir(config, runId), 'pack.md'), 'utf8').catch(() =>
-    fail('no context pack stored yet — run `pack` first'),
-  );
+  const contextPack = await contextPackOf(config, runId);
   const ladder = await readFile(join(runDir(config, runId), 'ladder.json'), 'utf8').catch(() => '');
   const failure = ladder ? (JSON.parse(ladder) as LadderResult) : undefined;
   const red = failure && !failure.passed ? failure.outcomes.at(-1) : undefined;
@@ -720,12 +765,13 @@ async function commandPrompt(argument: string): Promise<void> {
   const [runId, role] = argument.split(':');
   if (!runId || !role) fail('usage: prompt <runId>:<context-packer|implementer|reviewer|splitter|escalation-judge>');
   const config = settings();
-  await beat(ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
+  await beat(config, ticketSystemSource({ baseUrl: config.sourceUrl }), runId);
   const roleText = await readFile(join(HARNESS_ROOT, 'roles', `${role}.md`), 'utf8').catch(() =>
     fail(`no role definition for ${role}`),
   );
   const assembled = assemble({
     project: await projectConfig(config.targetRoot),
+    repoNotes: await repoNotes(config.targetRoot),
     contract: await contractOf(config, runId),
     roleText,
     payload: await payloadFor(config, runId, role),
@@ -738,7 +784,7 @@ async function commandReport(runId: string): Promise<void> {
   const config = settings();
   const state = await loadRun(config, runId);
   const source = ticketSystemSource({ baseUrl: config.sourceUrl });
-  await beat(source, runId);
+  await beat(config, source, runId);
   const path = join(runDir(config, runId), 'audit.jsonl');
   const lines = (await readFile(path, 'utf8').catch(() => '')).split('\n').filter(Boolean);
   await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {

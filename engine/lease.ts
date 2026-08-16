@@ -5,6 +5,19 @@
  * strand its contract forever — the lease lapses and the work returns to the
  * queue. That mechanism only helps if the live agent renews, and it only stays
  * safe if an agent whose renewal was refused stops.
+ *
+ * This is also the only channel by which a run can be stopped from outside.
+ * Cancelling a contract, revoking an authorisation that turned out too wide,
+ * superseding a version — whatever the reason, upstream takes the lease back and
+ * the next renewal refuses. The run does not need to know which of those
+ * happened; it needs to stop acting on work it no longer holds.
+ *
+ * Because renewal happens at the start of every subcommand, **the boundary
+ * between two subcommands is a safe point**: nothing is half-written there, the
+ * worktree is on disk, and the run record says exactly how far it got. That is
+ * the granularity at which this layer can be interrupted, and it is why nothing
+ * here deletes a worktree on refusal — the half-finished change is often the
+ * most useful thing a person gets out of a cancelled run.
  */
 import type { WorkSource } from '../ports/work-source.ts';
 

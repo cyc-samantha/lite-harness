@@ -8,7 +8,7 @@
  */
 import { describe, expect, it } from 'vitest';
 
-import { assemble, type RolePayload } from '../engine/prompt.ts';
+import { assemble, REPO_NOTES_LIMIT_BYTES, type RolePayload } from '../engine/prompt.ts';
 
 import { validContract, validProject } from './fixtures/index.ts';
 
@@ -16,7 +16,12 @@ const PACK = 'src/board/export.ts — the module the criteria name';
 const DIFF = '--- a/src/board/export.ts\n+++ b/src/board/export.ts\n+  throw new Error("unknown column");';
 
 function promptFor(payload: RolePayload, roleText = `# ${payload.role}\nDo the ${payload.role} thing.`) {
-  return assemble({ project: validProject(), contract: validContract(), roleText, payload });
+  return assemble({ project: validProject(), repoNotes: '', contract: validContract(), roleText, payload });
+}
+
+function withNotes(notes: string) {
+  const payload: RolePayload = { role: 'implementer', worktree: '/wt', contextPack: PACK };
+  return assemble({ project: validProject(), repoNotes: notes, contract: validContract(), roleText: '# r', payload });
 }
 
 const packer = (): ReturnType<typeof promptFor> =>
@@ -137,5 +142,33 @@ describe('the conditional roles', () => {
     // @ts-expect-error a splitter payload has no diff field, by construction
     const forbidden: RolePayload = { role: 'splitter', filesChanged: 14, diff: DIFF };
     expect(forbidden).toBeDefined();
+  });
+});
+
+/**
+ * The repository's own notes belong in the slot that is shared widest, and the
+ * budget on them has to be a test — always-loaded text is paid for on every
+ * spawn and nobody notices a paragraph being added.
+ */
+describe("what the repository says about itself", () => {
+  it('rides in the shared prefix, so every role in the run pays for it once', () => {
+    const prompt = withNotes('Modules are wired in `bin/`, never in `engine/`.');
+    expect(prompt.sharedPrefix).toContain('Modules are wired in');
+  });
+
+  it('is absent rather than empty-headed when the repository has no notes', () => {
+    expect(withNotes('').sharedPrefix).not.toContain('How this codebase works');
+    expect(withNotes('   \n  ').sharedPrefix).not.toContain('How this codebase works');
+  });
+
+  it('keeps the contract after it, so the widest-shared slot still comes first', () => {
+    const prefix = withNotes('some notes').sharedPrefix;
+    expect(prefix.indexOf('How this codebase works')).toBeLessThan(prefix.indexOf('This contract'));
+  });
+
+  it('says so in the prompt when a repository writes more than the budget allows', () => {
+    const prompt = withNotes('x'.repeat(REPO_NOTES_LIMIT_BYTES + 500));
+    expect(prompt.sharedPrefix).toContain('over the budget');
+    expect(Buffer.byteLength(prompt.sharedPrefix, 'utf8')).toBeLessThan(REPO_NOTES_LIMIT_BYTES + 2_000);
   });
 });
