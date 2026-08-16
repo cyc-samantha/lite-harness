@@ -19,6 +19,16 @@ actually constrain you.
 - **Never add a runtime dependency.** It is a supply-chain decision, and it
   belongs to a person.
 - **Never write a secret anywhere**, including into an error message or a log.
+- **Staying inside the file boundary is not the whole boundary.** Reaching the
+  network, a database, a credential or anything in production is governed by
+  `permissions` in the project's declaration, and everything there defaults to
+  denied. A clean diff in a permitted file can still do the damage.
+
+## Where this stops
+
+You produce a **verified change candidate**: a branch, and evidence for every
+criterion. Merging it, releasing it and running it are somebody else's. Do not
+merge, do not deploy, and do not treat a green ladder as permission to.
 
 ## The contract is authoritative
 

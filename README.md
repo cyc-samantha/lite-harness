@@ -1,11 +1,18 @@
 # lite-harness
 
-An execution layer. A sealed work contract goes in; a branch with evidence for
-every acceptance criterion comes out.
+An execution layer. A sealed work contract goes in; a **verified change
+candidate** comes out — a branch, evidence for every acceptance criterion, and a
+record of the world it was produced in.
 
 It does not decide whether the work is done. It produces evidence, and the work
 source adjudicates that against criteria a person sealed. That division is the
 whole design: **the thing doing the work never grades it.**
+
+It also stops there. Merging the branch, running CI on it, releasing it, watching
+it in production — all of that is the next system's. Drawing the line here is
+deliberate: a delivery layer whose definition of done reaches into production
+acquires a merge queue, a release process and an incident channel, and stops
+being something a small change can pass through ten times a day.
 
 ## What it is not
 
@@ -29,7 +36,7 @@ Then `/run <contract-id>`.
 | Variable | Meaning | Default |
 |---|---|---|
 | `LITE_TARGET` | The repository being worked on | the current directory |
-| `LITE_SOURCE_URL` | Base URL of the work source | `http://127.0.0.1:8787` |
+| `LITE_SOURCE_URL` | Base URL of the work source | `http://127.0.0.1:4600` |
 | `LITE_DATA` | Where run state and worktrees live | `~/.claude/lite` |
 | `LITE_AGENT` | Name recorded on the claim | `lite-harness` |
 
@@ -44,18 +51,22 @@ to run twice: a run is resumed, not restarted.
 
 | | Command | What it decides |
 |---|---|---|
-| 1 | `start <contract-id>` | Claims the work, runs the eight admission checks, prepares the worktree |
-| 2 | `prompt <runId>:context-packer` → `pack <runId>` | Which files matter, stored for the implementer |
-| 3 | `prompt <runId>:implementer` | The change itself, inside the worktree |
-| 4 | `gates <runId>` | Exit 2 means a rung went red; the output goes back to the same implementer |
-| 5 | `scope <runId>` | Exit 2 means the change left the contract's boundary |
-| 6 | `prompt <runId>:reviewer` | A second reading, against the contract and nothing else |
-| 7 | `report <runId>` | Forwards the audit trail upstream |
-| 8 | `submit <runId>` | Evidence to the work source, which returns the verdict |
+| 1 | `start <contract-id>` | Claims the work, runs the admission checks, fixes the execution basis, prepares the worktree |
+| 2 | `prompt <runId>:implementer` | The change itself, inside the worktree |
+| 3 | `gates <runId>` | Which rung went red, and what class of failure that is |
+| 4 | `scope <runId>` | Whether the change left the contract's boundary |
+| 5 | `prompt <runId>:reviewer` | A second reading, against the contract and nothing else |
+| 6 | `pr <runId> <url>` → `report <runId>` | Records the candidate and forwards the audit trail |
+| 7 | `submit <runId>` | Evidence to the work source, which returns the verdict |
 
-Steps 1, 4, 5 and 8 are decisions a machine can be held to. The rest are
+Steps 1, 3, 4 and 7 are decisions a machine can be held to. The rest are
 judgements. Nothing in the first group asks a model, and nothing in the second
 returns a verdict.
+
+A failure exits with its class — `2` retryable, `3` hard stop, `4` spec blocked,
+`5` waiting on a named person — and prints where it stopped and who acts next.
+Those are four different people, and a system that answers only "it failed" sends
+all four to the same place.
 
 ## Layout
 
@@ -65,23 +76,76 @@ returns a verdict.
 | `adapters/` | One work source's wire format and quirks | The only place upstream types appear |
 | `engine/` | Admission, gates, evidence, scope, prompts, run record | Names no project, imports no adapter |
 | `bin/` | The composition root | The only file that knows both sides |
-| `roles/` | Three prompts | No repository facts |
+| `roles/` | The role prompts | No repository facts |
 | `hooks/` | Four guards | Path-based, never role-based |
 | `skills/run/` | The orchestrator's sequence | Coordinates; writes nothing |
 | `rules/core.md` | What every spawn is told | Under budget, or the build fails |
 
-## The eight admission checks
+## The admission checks
 
 Nothing reaches an agent until all of them pass. They read contract shape and
 declared capability — never source — so they are identical for every project and
 cost no model call at all.
 
-Contract shape · seal integrity · authority · dependencies · capability match ·
-scope resolvable · protected-path conflict · environment ready.
+Contract shape · seal integrity · authority · dependencies · unaccepted proposal ·
+unanswered decision · missing signature · unevidenceable criterion · capability
+match · scope resolvable · protected-path conflict · environment ready.
+
+Three of those read the seal for what it fails to say. A criterion still marked
+`proposed` is not yet anyone's requirement. A blocking decision the seal records
+no answer to is one this layer cannot confirm anybody answered — and an agent
+handed an unanswered decision does not stop, it picks an answer and that answer
+becomes policy. Work marked `rewrite` or `critical` needs a signature the seal
+actually carries.
+
+All three refuse on absence, which will over-refuse against a work source that
+records its answers elsewhere. That is the intended direction: an answer kept
+outside the seal was never sealed, and the fix is to seal it.
 
 Each refuses on input it cannot evaluate. A reference that will not resolve, a
 dependency the source has never heard of, a gate whose command is missing: all
 stop the run rather than proceeding on the assumption it was probably fine.
+
+## What a run records about the world it ran in
+
+A sealed contract says what was approved. It does not say what the work was
+approved *against* — and the same contract, run in March and again in May, can
+pass and then fail without a byte of it changing. The base branch moved. The
+gate commands were edited. The engine was upgraded.
+
+So every run fixes an **execution basis** at admission and stamps it on every
+checkpoint and every piece of evidence:
+
+| Field | Why it is not derivable from the others |
+|---|---|
+| `contract_sha` | which sealed version, of possibly several |
+| `base_repo_sha` | `main` in March and `main` in May are the same name, not the same commit |
+| `project_config_sha` | the gates are declared in a file that changes |
+| `harness_version` | the engine changes |
+| `execution_protocol_version` | whether a later engine can still honour this run at all |
+| `contract_schema_version` | what shape was accepted when it was admitted |
+
+None of this can be backfilled. The worlds are gone by the time anybody asks.
+
+## What a run may reach
+
+Path scope is not execution scope. An agent that stays entirely inside one
+permitted file — clean diff, no scope violation, every gate green — can still
+call an external API, drop a table, rotate a credential, or move money. The
+filesystem boundary does not touch any of that.
+
+`permissions` in `project.yaml` is therefore required, and everything in it
+defaults to denied: network egress, database read and write, named secrets,
+infrastructure mutation, production access. `permissions: {}` is a repository
+saying it grants nothing; no key at all is a repository that never considered the
+question, and that is refused.
+
+**This is a declaration, not an enforcement.** Only the filesystem and secret
+boundaries actually bite today, via hooks. Making the rest real needs a sandbox —
+network namespaces, a credential broker, an isolated database — and that is a
+slice of its own. The shape is here first because a declaration nobody wrote
+cannot be added afterwards: it would mean asking, a year from now, what every
+past run had been permitted to do.
 
 ## The gate ladder
 
@@ -115,6 +179,14 @@ first byte that differs: **project → contract → role → payload**. Putting 
 role first is the obvious arrangement and breaks the prefix at position one, so
 two roles in the same run share nothing.
 
+Slot 1 carries the target repository's `AGENTS.md` alongside its gate
+declarations — one document per repository, identical across every call ever
+made against it, so the cache holds it once. Sending a model to read the
+repository and pick files instead is paying tokens to rebuild what that file
+states directly, which is why the context-packer step is now optional and off by
+default. It earns its place once somebody measures implementers wasting turns
+hunting for files, and not before.
+
 The payload type is the other half. A reviewer's payload carries a diff and has
 no field for the context pack, the repository, or how the implementation went —
 so its second reading stays independent by construction rather than by anyone
@@ -138,7 +210,7 @@ A budget nobody can fail is a wish. These fail the build.
 ## Development
 
 ```bash
-npm run check      # typecheck + 56 unit tests
+npm run check      # typecheck + 156 unit tests
 bats tests/shell/  # 58 hook tests
 ```
 
@@ -147,42 +219,38 @@ for working on this repository are in `CLAUDE.md`.
 
 ## Status
 
-Slice 1 is done: one contract, one run, claim to `accepted`.
-
-A real sealed contract ran against [harness-factory-map][pilot], produced a pull
-request, and was adjudicated `accepted` by the work source. All eight admission
-checks passed against a real repository, all six gate rungs ran, and the test
-named by the acceptance criterion was confirmed red before the change and green
-after — so the evidence stands for something.
-
-The run found four defects that no unit test would have:
-
-- branch names were built from contract ids containing colons, which git refuses
-- a retried contract asked for the branch its previous attempt had created
-- `git status --porcelain`'s significant leading space was trimmed away, which
-  corrupted one path per run and reported it as a scope violation
-- a replayed `submit` blamed a lapsed lease instead of saying the work was done
-
-Each is fixed, with tests. The lease itself was validated the hard way: the pilot
-outlived its lease mid-run, the work source requeued the contract, and the next
-command refused rather than acting on work it no longer held.
-
-Slice 2 is done: failures are classified, retries are bounded, and a run that
-cannot finish hands the work back with an account of why.
-
-Deliberately bad contracts were run against the live system. A broken seal and a
-scope matching no files are refused at admission. A permanently red gate is
-retried once, then recognised as the identical failure and sent to a judge rather
-than retried again. A third claim on a twice-failed contract is refused, and so
-is any claim whose attempt history cannot be read.
+Slices 1 and 2 are done: one contract, one run, claim to `accepted`; failures
+classified, retries bounded, and a run that cannot finish hands the work back
+with an account of why. A real sealed contract ran against
+[harness-factory-map][pilot] and was adjudicated `accepted`, and deliberately bad
+contracts were run against the live system to check that they escalate rather
+than loop.
 
 That exercise found the worst defect so far: a contract naming a test nobody had
 written was **accepted**. Runners that select tests by name exit zero when they
 match nothing, so the rung that proves an acceptance criterion proved a criterion
 nothing had touched. Evidence now requires the named test to exist as well as the
-rung to be green, and the same contract is rejected.
+rung to be green.
 
-Not yet built: concurrent runs and the merge queue that would make them safe, and
-risk-routed model review.
+Slice 3 is done: evidence binds to the execution basis and not only the contract,
+failures answer who acts next in four ways rather than two, the seal is read for
+three things it may fail to say, and the two retry layers share one budget.
+
+Same-agent repair stopped being absolute in the same slice. It remains the
+default — reloading context is slow, expensive, and loses what was already tried
+— but an implementer that misread the architecture repairs from that misreading
+and eventually edits the test to match. Two signals now buy one clean restart:
+the same error signature twice, and a diff that returns to a shape the run
+already produced.
+
+**Known gaps, deliberately.** Effect permissions are declared and not enforced;
+only the filesystem and secret boundaries bite, and the rest waits on a real
+sandbox. The shared budget is reconciled locally, so a contract retried on a
+second machine refuses rather than proceeding — correct, but it refuses a case
+that should work. Concurrency is one claim per contract and nothing more: no
+merge queue, because text-level non-overlap is not semantic non-overlap and what
+makes parallel runs safe is serialising the merge point, not declaring scopes.
+No second target repository yet, so "onboarding costs no engine change" is still
+a claim rather than a demonstration.
 
 [pilot]: https://github.com/cyc-samantha/harness-factory-map/pull/2

@@ -26,7 +26,7 @@ import { dirname, join, resolve } from 'node:path';
 import { parse } from 'yaml';
 
 import { ticketSystemSource } from '../adapters/ticket-system/index.ts';
-import { loadProjectConfig, type ProjectConfig } from '../ports/project-capabilities.ts';
+import { loadProjectConfig, type Permissions, type ProjectConfig } from '../ports/project-capabilities.ts';
 import type { Checkpoint, WorkContract, WorkSource } from '../ports/work-source.ts';
 
 import { basisSha, sealBasis, type ExecutionBasis } from '../engine/envelope.ts';
@@ -226,6 +226,12 @@ async function basisOf(config: Settings, runId: string): Promise<ExecutionBasis>
   return readArtifact<ExecutionBasis>(config, runId, 'basis.json');
 }
 
+/** Rebuilds what a later subcommand needs to report from: the world, and what it may reach. */
+async function reporterFor(config: Settings, source: WorkSource, state: RunState): Promise<Reporter> {
+  const project = await projectConfig(config.targetRoot);
+  return { source, config, state, basis: await basisOf(config, state.runId), permissions: project.permissions };
+}
+
 async function harnessVersion(): Promise<string> {
   const raw = await readFile(join(HARNESS_ROOT, 'package.json'), 'utf8').catch(() => '{}');
   return (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
@@ -247,6 +253,7 @@ interface Reporter {
   config: Settings;
   state: RunState;
   basis: ExecutionBasis;
+  permissions: Permissions;
 }
 
 /**
@@ -266,6 +273,7 @@ async function sendCheckpoint(to: Reporter, role: string, checkpoint: Checkpoint
     model_id: to.config.modelId,
     execution_basis: to.basis,
     envelope_sha: basisSha(to.basis),
+    permissions: to.permissions,
   };
   await to.source.checkpoint(to.state.runId, { ...checkpoint, payload: { ...checkpoint.payload, ...telemetry } });
 }
@@ -329,7 +337,7 @@ async function commandStart(contractId: string): Promise<void> {
 
   const basis = await observeBasis(config, repo, project.pr.base, claim.sealVersion);
   await writeArtifact(config, claim.runId, 'basis.json', basis);
-  const to: Reporter = { source, config, state, basis };
+  const to: Reporter = { source, config, state, basis, permissions: project.permissions };
 
   const verdict = await preflight(claim.contract, project, preflightDeps(repo, source));
   if (!verdict.ok) {
@@ -536,7 +544,7 @@ async function commandEscalate(runId: string, extra: string[]): Promise<void> {
   const packet = await readStdin();
   if (!packet) fail('an escalation with no account of what happened is worth nothing — write the packet on stdin');
 
-  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
+  await sendCheckpoint(await reporterFor(config, source, state), ENGINE, {
     step: amending ? 'amendment_proposed' : 'escalated',
     summary: packet.split('\n')[0]?.slice(0, 200) ?? 'escalated',
     payload: { packet, phase: state.phase, gate_runs: state.gateRuns, last_red: state.lastRed ?? null },
@@ -676,7 +684,7 @@ async function commandPr(runId: string, extra: string[]): Promise<void> {
   const files = await changedPaths(repo, worktree, project.pr.base);
 
   await saveState(config.dataDir, { ...advanced(state, 'pr_open', now()), prUrl: url });
-  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
+  await sendCheckpoint(await reporterFor(config, source, state), ENGINE, {
     step: 'pr_opened',
     summary: `pull request open with ${files.length} file(s) changed`,
     payload: { url, branch: state.branch ?? '', files_changed: files },
@@ -787,7 +795,7 @@ async function commandReport(runId: string): Promise<void> {
   await beat(config, source, runId);
   const path = join(runDir(config, runId), 'audit.jsonl');
   const lines = (await readFile(path, 'utf8').catch(() => '')).split('\n').filter(Boolean);
-  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
+  await sendCheckpoint(await reporterFor(config, source, state), ENGINE, {
     step: 'audit',
     summary: `${lines.length} tool call(s) recorded`,
     payload: { calls: lines.map((line) => JSON.parse(line) as unknown) },

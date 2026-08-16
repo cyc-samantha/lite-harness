@@ -62,6 +62,18 @@ describe('the project declaration format', () => {
     expect(validProject().gates.some((gate) => gate.per_criterion)).toBe(true);
   });
 
+  it('refuses a declaration that never said what its runs may reach', () => {
+    const loaded = loadProjectConfig({ version: 2, gates: [{ id: 'x', run: 'true' }], pr: { base: 'main' } });
+    expect(loaded.ok).toBe(false);
+    expect(loaded.ok === false && loaded.problems[0]?.path).toBe('permissions');
+  });
+
+  it('accepts a declaration that grants nothing, which is a different statement', () => {
+    const loaded = loadProjectConfig({ version: 2, gates: [{ id: 'x', run: 'true' }], permissions: {}, pr: { base: 'main' } });
+    expect(loaded.ok).toBe(true);
+    expect(loaded.ok && loaded.config.permissions.production_access).toBe(false);
+  });
+
   it('refuses a version this engine does not understand', () => {
     const loaded = loadProjectConfig({ version: 99, gates: [{ id: 'x', run: 'true' }], pr: { base: 'main' } });
     expect(loaded.ok).toBe(false);
@@ -69,7 +81,7 @@ describe('the project declaration format', () => {
 
   it('refuses a key it does not recognise, rather than ignoring it', () => {
     const loaded = loadProjectConfig({
-      version: 1,
+      version: 2,
       gates: [{ id: 'x', run: 'true' }],
       pr: { base: 'main' },
       gatez: [],
