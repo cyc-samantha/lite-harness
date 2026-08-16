@@ -66,6 +66,7 @@ const BY_CHECK: Partial<Record<PreflightCheck, Route>> = {
   contract_shape: ['SPEC_BLOCKED', 'CONTRACT'],
   unevidenceable_criterion: ['SPEC_BLOCKED', 'CONTRACT'],
   scope_resolvable: ['SPEC_BLOCKED', 'CONTRACT'],
+  unresolvable_reference: ['SPEC_BLOCKED', 'CONTRACT'],
   unaccepted_proposal: ['SPEC_BLOCKED', 'CONTRACT'],
   unanswered_decision: ['HUMAN_DECISION_REQUIRED', 'CONTRACT'],
   missing_signature: ['HUMAN_DECISION_REQUIRED', 'CONTRACT'],
