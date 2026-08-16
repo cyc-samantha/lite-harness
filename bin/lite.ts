@@ -29,13 +29,14 @@ import { ticketSystemSource } from '../adapters/ticket-system/index.ts';
 import { loadProjectConfig, type ProjectConfig } from '../ports/project-capabilities.ts';
 import type { Checkpoint, WorkContract, WorkSource } from '../ports/work-source.ts';
 
+import { basisSha, sealBasis, type ExecutionBasis } from '../engine/envelope.ts';
 import { evidenceFrom, type TestLocator } from '../engine/evidence.ts';
 import { classify, errorSignature, type FailureAction, type Observation } from '../engine/failure-table.ts';
 import { runLadder, type GateOutcome, type LadderResult } from '../engine/gates.ts';
 import { renewLease } from '../engine/lease.ts';
 import { preflight, type PreflightDeps } from '../engine/preflight.ts';
 import { assemble, type RolePayload } from '../engine/prompt.ts';
-import { branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, worktreeFiles, type Repo } from '../engine/repo.ts';
+import { baseSha, branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, worktreeFiles, type Repo } from '../engine/repo.ts';
 import { describeViolations, scopeViolations } from '../engine/scope-check.ts';
 import { canRun, shellRunner } from '../engine/shell.ts';
 import { advanced, elapsedMinutes, hasReached, loadState, newRun, saveState, type RunState } from '../engine/state.ts';
@@ -143,6 +144,32 @@ async function digestOf(path: string): Promise<string> {
   return bytes ? createHash('sha256').update(bytes).digest('hex').slice(0, 12) : 'absent';
 }
 
+/**
+ * SAFETY: unlike `digestOf`, an unreadable file here stops the run. A role stamp
+ * that reads `absent` is a slightly poorer audit trail; a basis that reads
+ * `absent` is a run claiming to know what it executed against when it does not.
+ */
+async function requiredDigest(path: string): Promise<string> {
+  const digest = await digestOf(path);
+  return digest === 'absent' ? fail(`cannot digest ${path}, so this run cannot record what it executed against`) : digest;
+}
+
+const CONFIG_PATH = ['.harness', 'project.yaml'] as const;
+
+/** Fixes the world at admission: the seal, the commit, the declarations, the engine. */
+async function observeBasis(config: Settings, repo: Repo, base: string, sealVersion: string): Promise<ExecutionBasis> {
+  return sealBasis({
+    contractSha: sealVersion,
+    baseRepoSha: await baseSha(repo, base).catch(() => fail(`cannot resolve ${base} in ${repo.root}`)),
+    projectConfigSha: await requiredDigest(join(config.targetRoot, ...CONFIG_PATH)),
+    harnessVersion: await harnessVersion(),
+  });
+}
+
+async function basisOf(config: Settings, runId: string): Promise<ExecutionBasis> {
+  return readArtifact<ExecutionBasis>(config, runId, 'basis.json');
+}
+
 async function harnessVersion(): Promise<string> {
   const raw = await readFile(join(HARNESS_ROOT, 'package.json'), 'utf8').catch(() => '{}');
   return (JSON.parse(raw) as { version?: string }).version ?? 'unknown';
@@ -158,31 +185,33 @@ async function actorStamp(role: string, version: string): Promise<string> {
   return `${role}@${await digestOf(join(HARNESS_ROOT, 'roles', `${role}.md`))}`;
 }
 
+/** Everything a progress report needs to say who wrote it and from what world. */
+interface Reporter {
+  source: WorkSource;
+  config: Settings;
+  state: RunState;
+  basis: ExecutionBasis;
+}
+
 /**
- * Reports progress upstream with the six fields that make it answerable later.
+ * Reports progress upstream, stamped with the world the run is executing in.
  *
- * These cost six fields now and a replay of every run in history if they are
- * added afterwards. Nothing in this slice reads them back — the reason to write
- * them is that the question they answer ("which prompt, which config, which
- * model produced this?") can only be asked of runs that already recorded it.
+ * The basis is the expensive half to add late — every run already in the ledger
+ * would have to be replayed to acquire it, and the worlds they ran in are gone.
+ * `model_id` rides along beside it rather than inside it: the engine cannot
+ * observe which model is driving, so it is reported, not established, and it
+ * must not sit in a record whose whole claim is that it was observed.
  */
-async function sendCheckpoint(
-  source: WorkSource,
-  config: Settings,
-  state: RunState,
-  role: string,
-  checkpoint: Checkpoint,
-): Promise<void> {
-  const version = await harnessVersion();
+async function sendCheckpoint(to: Reporter, role: string, checkpoint: Checkpoint): Promise<void> {
   const telemetry = {
-    run_id: state.runId,
-    contract_id: state.contractId,
-    role: await actorStamp(role, version),
-    config_hash: await digestOf(join(config.targetRoot, '.harness', 'project.yaml')),
-    model_id: config.modelId,
-    harness_version: version,
+    run_id: to.state.runId,
+    contract_id: to.state.contractId,
+    role: await actorStamp(role, to.basis.harness_version),
+    model_id: to.config.modelId,
+    execution_basis: to.basis,
+    envelope_sha: basisSha(to.basis),
   };
-  await source.checkpoint(state.runId, { ...checkpoint, payload: { ...checkpoint.payload, ...telemetry } });
+  await to.source.checkpoint(to.state.runId, { ...checkpoint, payload: { ...checkpoint.payload, ...telemetry } });
 }
 
 /**
@@ -231,9 +260,13 @@ async function commandStart(contractId: string): Promise<void> {
   await saveState(config.dataDir, state);
   await writeArtifact(config, claim.runId, 'contract.json', claim.contract);
 
+  const basis = await observeBasis(config, repo, project.pr.base, claim.sealVersion);
+  await writeArtifact(config, claim.runId, 'basis.json', basis);
+  const to: Reporter = { source, config, state, basis };
+
   const verdict = await preflight(claim.contract, project, preflightDeps(repo, source));
   if (!verdict.ok) {
-    await sendCheckpoint(source, config, state, ENGINE, {
+    await sendCheckpoint(to, ENGINE, {
       step: 'preflight_refused',
       summary: `admission refused: ${verdict.failures.length} problem(s)`,
       payload: { failures: verdict.failures },
@@ -246,7 +279,7 @@ async function commandStart(contractId: string): Promise<void> {
   const branch = branchName(project.pr.branch_prefix, contractId, claim.runId);
   await createWorktree(repo, { path: worktree, branch, base: project.pr.base });
   await saveState(config.dataDir, { ...advanced(state, 'admitted', now()), worktree, branch });
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint(to, ENGINE, {
     step: 'admitted',
     summary: 'admitted; worktree prepared',
     payload: { branch },
@@ -352,7 +385,7 @@ async function commandEscalate(runId: string, extra: string[]): Promise<void> {
   const packet = await readStdin();
   if (!packet) fail('an escalation with no account of what happened is worth nothing — write the packet on stdin');
 
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
     step: amending ? 'amendment_proposed' : 'escalated',
     summary: packet.split('\n')[0]?.slice(0, 200) ?? 'escalated',
     payload: { packet, phase: state.phase, gate_runs: state.gateRuns, last_red: state.lastRed ?? null },
@@ -393,7 +426,12 @@ async function commandSubmit(runId: string): Promise<void> {
   // to claim the work again — which is how finished work gets done twice.
   if (hasReached(state, 'submitted')) fail('this run has already submitted its evidence');
   await beat(source, runId);
-  const evidence = evidenceFrom(contract, ladder, await namedTests(config, state));
+  const evidence = evidenceFrom({
+    contract,
+    ladder,
+    locate: await namedTests(config, state),
+    envelopeSha: basisSha(await basisOf(config, runId)),
+  });
   const verdict = await source.submit(runId, evidence);
   await saveState(config.dataDir, advanced(state, 'submitted', now()));
   await writeArtifact(config, runId, 'verdict.json', verdict);
@@ -480,7 +518,7 @@ async function commandPr(runId: string, extra: string[]): Promise<void> {
   const files = await changedPaths(repo, worktree, project.pr.base);
 
   await saveState(config.dataDir, { ...advanced(state, 'pr_open', now()), prUrl: url });
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
     step: 'pr_opened',
     summary: `pull request open with ${files.length} file(s) changed`,
     payload: { url, branch: state.branch ?? '', files_changed: files },
@@ -578,7 +616,7 @@ async function commandReport(runId: string): Promise<void> {
   await beat(source, runId);
   const path = join(runDir(config, runId), 'audit.jsonl');
   const lines = (await readFile(path, 'utf8').catch(() => '')).split('\n').filter(Boolean);
-  await sendCheckpoint(source, config, state, ENGINE, {
+  await sendCheckpoint({ source, config, state, basis: await basisOf(config, runId) }, ENGINE, {
     step: 'audit',
     summary: `${lines.length} tool call(s) recorded`,
     payload: { calls: lines.map((line) => JSON.parse(line) as unknown) },

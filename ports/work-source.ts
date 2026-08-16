@@ -79,10 +79,18 @@ export interface WorkContract {
   dependsOn: string[];
 }
 
-/** One criterion's result, as observed by the run. */
+/**
+ * One criterion's result, as observed by the run.
+ *
+ * `envelopeSha` points back at the execution basis this result was produced on.
+ * Without it a green result and a later red one on the same sealed contract are
+ * indistinguishable from a flaky test, when the actual difference may be that
+ * the base branch moved or the gate commands were edited underneath.
+ */
 export interface Evidence {
   acId: string;
   passed: boolean;
+  envelopeSha: string;
   note?: string;
 }
 
@@ -95,6 +103,8 @@ export interface Checkpoint {
 
 export interface Claim {
   runId: string;
+  /** Which sealed version of the contract this run was handed. */
+  sealVersion: string;
   contract: WorkContract;
 }
 

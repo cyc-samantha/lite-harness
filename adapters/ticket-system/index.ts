@@ -80,7 +80,11 @@ export function ticketSystemSource(options: TicketSystemOptions): WorkSource {
 
     async claim(contractId: string, agent: string): Promise<Claim> {
       const claimed = (await request('POST', `/v1/work-items/${contractId}/claim`, { agent })) as ClaimResponse;
-      return { runId: claimed.runId, contract: await contractFor(claimed.versionId) };
+      // WHY: the version id is the seal. Fetching the contract by it and then
+      // discarding it would leave the run unable to say which of several sealed
+      // versions it actually built against.
+      if (!claimed.versionId?.trim()) throw new Error(`claim on ${contractId} returned no sealed version to build against`);
+      return { runId: claimed.runId, sealVersion: claimed.versionId, contract: await contractFor(claimed.versionId) };
     },
 
     async heartbeat(runId: string): Promise<void> {
