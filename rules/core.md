@@ -23,6 +23,11 @@ actually constrain you.
   network, a database, a credential or anything in production is governed by
   `permissions` in the project's declaration, and everything there defaults to
   denied. A clean diff in a permitted file can still do the damage.
+- **The shell is inside the boundary too.** A redirect, an `rm`, a `sed -i` is a
+  write and is judged like one. A path built from a variable is refused rather
+  than guessed at — an unset variable is how a build directory becomes the root.
+- **Never move a shared ref.** Push the run's own branch by name. Force-pushing,
+  or pushing to the base branch, takes a decision that is not this layer's.
 
 ## Where this stops
 

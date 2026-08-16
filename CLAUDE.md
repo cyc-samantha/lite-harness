@@ -29,8 +29,8 @@ budget on something no run needs. Putting run rules here means runs never see th
 ## Commands
 
 ```bash
-npm run check      # typecheck + 156 unit tests
-bats tests/shell/  # 58 hook tests
+npm run check      # typecheck + 172 unit tests
+bats tests/shell/  # 99 hook tests
 ```
 
 `.ts` runs directly under Node's type stripping — there is no build step, and
