@@ -206,3 +206,92 @@ _run_guard() {
   run _run_guard 'git -C "$WORKTREE" checkout main'
   [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# Moving a shared ref. Excused by nothing — not by delegation, not by cd.
+#
+# (a) revert-goes-RED: reverting the `exit 2` in the push branch makes every
+#     block assertion below fail.
+# (b) unevaluable-input-refuses: a push whose destination this hook cannot read
+#     — no refspec, a variable refspec, a `+` force refspec — is BLOCKED.
+
+@test "(a) push to the base branch is blocked" {
+  run _run_guard 'git push origin main'
+  [ "$status" -eq 2 ]
+}
+
+@test "(a) push to a protected ref by full refname is blocked" {
+  run _run_guard 'git push origin HEAD:refs/heads/production'
+  [ "$status" -eq 2 ]
+}
+
+@test "(a) force push is blocked even to the run's own branch" {
+  run _run_guard 'git push --force origin agent/wc-1'
+  [ "$status" -eq 2 ]
+}
+
+@test "(a) force-with-lease is blocked" {
+  run _run_guard 'git push --force-with-lease origin agent/wc-1'
+  [ "$status" -eq 2 ]
+}
+
+@test "worktree delegation does NOT excuse a push to a shared ref" {
+  run _run_guard 'git -C /path/to/.claude/worktrees/wt push origin main'
+  [ "$status" -eq 2 ]
+}
+
+@test "a cd into the worktree does NOT excuse a push to a shared ref" {
+  run _run_guard 'cd "$WORKTREE" && git push origin master'
+  [ "$status" -eq 2 ]
+}
+
+@test "a push riding on a later clause is still blocked" {
+  run _run_guard 'npm test && git push origin main'
+  [ "$status" -eq 2 ]
+}
+
+@test "LITE_BASE names a protected ref this repository would not otherwise know" {
+  export LITE_BASE=trunk-2026
+  run _run_guard 'git push origin trunk-2026'
+  [ "$status" -eq 2 ]
+}
+
+@test "(b) a bare push refuses, because upstream config decides where it lands" {
+  run _run_guard 'git push'
+  [ "$status" -eq 2 ]
+}
+
+@test "(b) a push naming only a remote refuses" {
+  run _run_guard 'git push origin'
+  [ "$status" -eq 2 ]
+}
+
+@test "(b) a refspec built from a variable refuses" {
+  run _run_guard 'git push origin "$BRANCH"'
+  [ "$status" -eq 2 ]
+}
+
+@test "(b) a + force refspec refuses" {
+  run _run_guard 'git push origin +agent/wc-1:agent/wc-1'
+  [ "$status" -eq 2 ]
+}
+
+@test "pushing the run's own branch by name is allowed" {
+  run _run_guard 'git push origin agent/wc-1'
+  [ "$status" -eq 0 ]
+}
+
+@test "pushing the run's own branch with -u is allowed" {
+  run _run_guard 'git push -u origin agent/wc-1'
+  [ "$status" -eq 0 ]
+}
+
+@test "a source ref named main pushed to the run's own branch is allowed" {
+  run _run_guard 'git push origin HEAD:agent/wc-1'
+  [ "$status" -eq 0 ]
+}
+
+@test "a non-git command containing the word push is untouched" {
+  run _run_guard 'npm run push-docs'
+  [ "$status" -eq 0 ]
+}
