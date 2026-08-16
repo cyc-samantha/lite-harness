@@ -103,11 +103,17 @@ node bin/lite.ts gates <runId>
 The exit code tells you what kind of failure it was, and the printed decision
 tells you why:
 
-| Exit | Meaning |
-|---|---|
-| 0 | every rung passed |
-| 2 | retryable — fix it and run gates again |
-| 3 | **do not retry.** The table has already decided this cannot be fixed by trying again |
+| Exit | Class | Who acts next |
+|---|---|---|
+| 0 | — | nobody; every rung passed |
+| 2 | `RETRYABLE` | you, in this run |
+| 3 | `HARD_STOP` | the platform |
+| 4 | `SPEC_BLOCKED` | whoever wrote the spec |
+| 5 | `HUMAN_DECISION_REQUIRED` | a named person |
+
+Every non-zero exit also prints the class, where it stopped, and who acts next.
+Report those three. They are the answer to the question a supervisor asks, and
+none of them is your opinion of how the work went.
 
 On exit 2, hand the printed output **back to the same implementer subagent** and
 let it fix the problem in place. Do not spawn a fresh implementer — the context
@@ -115,9 +121,15 @@ that produced the code is the context that should repair it. If you must
 re-spawn, ask for the prompt again: it now carries the failure, and its shared
 prefix is unchanged, so the cache still holds.
 
-On exit 3, stop. The run has hit a broken seal, a spent budget, a missing tool, a
-gate that has had its three attempts, or a failure identical to the last one.
-None of those get better on a fourth try. Ask for a judgement:
+The exception is `restart_fresh`. When the printed decision says that, the run
+has hit the same error twice or produced a diff it had already tried, and the
+context itself has become the problem — **spawn a new implementer that has not
+seen the earlier attempts.** This is the one time discarding the context is
+right, and it is offered once. If it fails the same way again, the question is
+about the contract, not the implementation.
+
+On exit 3, 4 or 5, stop. Nothing in those gets better on another try, and the
+three route to different people. Ask for a judgement:
 
 ```bash
 node bin/lite.ts prompt <runId>:escalation-judge
@@ -144,9 +156,9 @@ Both forms hand the work back to its source. Neither is a failure of yours.
 node bin/lite.ts scope <runId>
 ```
 
-Exit 2 means the change left the contract's boundary. Do not widen the scope —
-you cannot amend a sealed contract. Either have the implementer bring the change
-back inside, or escalate.
+A non-zero exit means the change left the contract's boundary. Do not widen the
+scope — you cannot amend a sealed contract. Either have the implementer bring the
+change back inside, or escalate.
 
 ### 6. Review
 
