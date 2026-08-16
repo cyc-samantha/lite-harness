@@ -3,6 +3,19 @@
 # REPO_ROOT HEAD stays on `main`; all HEAD-mutating git commands run via
 # worktree delegation. Trimmed port of the heavy harness main-branch-guard.
 #
+# Two separate rules live here, and they are separate on purpose.
+#
+# (1) HEAD mutation — git checkout / switch / reset --hard / merge / rebase, and
+# gh pr create — is excused by worktree delegation, because a worktree HEAD is
+# the run's own to move.
+#
+# (2) Moving a SHARED ref is excused by nothing. `git -C "$WORKTREE" push origin
+# main` is exactly as wrong as the bare form, so push is decided before the
+# delegation logic and never reaches it. This closes a rule that was already
+# written and had nothing behind it: rules/core.md says merging and releasing
+# belong to whatever takes the candidate from here, while a run could force-push
+# to the base branch and pass every guard in this repository.
+#
 # Blocks bare HEAD-mutating commands: git checkout / switch / reset --hard /
 # merge / rebase, and gh pr create. A command is ALLOWED only when EVERY
 # clause (split on `&&`/`||`/`;`/`|`) carrying a forbidden subcommand also
@@ -62,6 +75,82 @@ COMMAND="$(printf '%s' "$INPUT" | jq -r '.tool_input.command // empty' 2>/dev/nu
 # own value token (`-C <path>`) — so a flagged invocation doesn't hide a
 # forbidden subcommand from these regexes.
 _GIT_FLAGS='([[:space:]]+-[^[:space:]]+([[:space:]]+[^[:space:]]+)?)*'
+
+# Refs a run may never move. The run's own base comes from `$LITE_BASE` when the
+# engine exports it; the literals stay regardless, because a run pushing to
+# `production` is wrong even in a repository whose base is `develop`.
+_PROTECTED_REFS='main|master|develop|release|staging|production|prod|trunk'
+
+# Whether $segment (a git invocation from `git` onward) is a push, and whether
+# this guard can PROVE its destination is a ref the run is allowed to move.
+#
+# Push is deliberately outside the delegation model above. Delegation excuses a
+# HEAD mutation because a worktree HEAD is the run's own to move; it excuses
+# nothing about a shared ref, and `git -C "$WORKTREE" push origin main` is
+# exactly as wrong as the bare form.
+#
+# SAFETY (Iron Law 8): the allowed case is the narrow one. A push is permitted
+# only when it carries no force flag, names a remote, and names a literal
+# refspec whose destination is provably not protected. A bare `git push`
+# (destination decided by upstream config this hook cannot read), a refspec
+# built from a variable, and a `+refspec` force are all undecidable or
+# destructive, and all block. Reverting the final `return 0` here turns the
+# unevaluable-input tests RED.
+# The arguments of a `git push`, or failure when this git invocation is not one.
+# Global flags between `git` and its subcommand are stepped over, so a delegated
+# `git -C <path> push ...` is recognised — delegation must not hide a push any
+# more than it excuses one. Anchoring on the subcommand also keeps `git commit -m
+# "push origin main"` from reading as a push.
+_push_arguments() {
+  local -a tokens
+  local i=0
+  read -ra tokens <<<"$1"
+  while (( i < ${#tokens[@]} )); do
+    case "${tokens[i]}" in
+      -C|--git-dir|--work-tree|--namespace|-c) i=$((i + 2)) ;;
+      -*) i=$((i + 1)) ;;
+      *) break ;;
+    esac
+  done
+  [[ "${tokens[i]:-}" == push ]] || return 1
+  printf '%s' "${tokens[*]:i+1}"
+}
+
+_is_forbidden_push() {
+  local segment="$1" args token destination positionals=0
+  local -a tokens
+  args="$(_push_arguments "$segment")" || return 1
+  [[ -z "$args" ]] && return 0
+  [[ "$args" =~ (^|[[:space:]])(-f|--force|--force-with-lease)([=[:space:]]|$) ]] && return 0
+  # A refspec assembled from a variable or a substitution is a destination this
+  # hook cannot read, and an unreadable destination is not a safe one.
+  [[ "$args" == *'$'* || "$args" == *'`'* ]] && return 0
+
+  read -ra tokens <<<"$args"
+  for token in "${tokens[@]}"; do
+    [[ "$token" == -* ]] && continue
+    positionals=$((positionals + 1))
+    [[ "$token" == +* ]] && return 0
+    destination="${token##*:}"
+    destination="${destination#refs/heads/}"
+    [[ "$destination" =~ ^($_PROTECTED_REFS)$ ]] && return 0
+    [[ -n "${LITE_BASE:-}" && "$destination" == "$LITE_BASE" ]] && return 0
+  done
+
+  # With no remote and refspec spelled out, where this lands is decided by
+  # upstream configuration the hook cannot read.
+  (( positionals >= 2 )) || return 0
+  return 1
+}
+
+has_forbidden_push() {
+  local cmd="$1" clause segment
+  while IFS= read -r clause; do
+    segment="$(_git_segment "$clause")" || continue
+    _is_forbidden_push "$segment" && return 0
+  done < <(_split_clauses "$cmd")
+  return 1
+}
 
 is_forbidden_command() {
   local cmd="$1"
@@ -230,6 +319,15 @@ has_valid_delegation() {
 
   return 0
 }
+
+if has_forbidden_push "$COMMAND"; then
+  printf 'BLOCKED: a run does not move a shared ref.\n' >&2
+  printf 'The command:\n  %s\n' "$COMMAND" >&2
+  printf 'pushes to a protected destination, forces, or leaves the destination unstated.\n' >&2
+  printf 'This layer produces a verified change candidate; merging and releasing it belong\n' >&2
+  printf 'to whatever takes it from here. Push the run own branch by name instead.\n' >&2
+  exit 2
+fi
 
 is_forbidden_command "$COMMAND" || exit 0
 has_valid_delegation "$COMMAND" && exit 0

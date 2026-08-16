@@ -76,6 +76,7 @@ const BY_CHECK: Partial<Record<PreflightCheck, Route>> = {
   protected_path_conflict: ['HARD_STOP', 'CONTRACT'],
   capability_match: ['HARD_STOP', 'PLATFORM'],
   environment_ready: ['HARD_STOP', 'PLATFORM'],
+  secret_unavailable: ['HARD_STOP', 'PLATFORM'],
 };
 
 /**

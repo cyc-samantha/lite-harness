@@ -115,6 +115,24 @@ describe('admission checks', () => {
     expect(checksIn(result)).toContain('environment_ready');
     expect(reasonsIn(result)).toContain('target_test');
   });
+
+  it('9. refuses a credential the project grants and the machine does not export', async () => {
+    const result = await runWith(
+      (_contract, project) => {
+        project.permissions.secrets = ['DEPLOY_TOKEN'];
+      },
+      { secretPresent: () => false },
+    );
+    expect(checksIn(result)).toEqual(['secret_unavailable']);
+    expect(reasonsIn(result)).toContain('DEPLOY_TOKEN');
+  });
+
+  it('9b. admits a granted credential the machine does export', async () => {
+    const result = await runWith((_contract, project) => {
+      project.permissions.secrets = ['DEPLOY_TOKEN'];
+    });
+    expect(checksIn(result)).toEqual([]);
+  });
 });
 
 describe('unevaluable input', () => {

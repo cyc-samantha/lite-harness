@@ -77,7 +77,7 @@ all four to the same place.
 | `engine/` | Admission, gates, evidence, scope, prompts, run record | Names no project, imports no adapter |
 | `bin/` | The composition root | The only file that knows both sides |
 | `roles/` | The role prompts | No repository facts |
-| `hooks/` | Four guards | Path-based, never role-based |
+| `hooks/` | Five guards | Path-based, never role-based |
 | `skills/run/` | The orchestrator's sequence | Coordinates; writes nothing |
 | `rules/core.md` | What every spawn is told | Under budget, or the build fails |
 
@@ -89,7 +89,8 @@ cost no model call at all.
 
 Contract shape · seal integrity · authority · dependencies · unaccepted proposal ·
 unanswered decision · missing signature · unevidenceable criterion · capability
-match · scope resolvable · protected-path conflict · environment ready.
+match · scope resolvable · protected-path conflict · environment ready · secret
+unavailable.
 
 Three of those read the seal for what it fails to say. A criterion still marked
 `proposed` is not yet anyone's requirement. A blocking decision the seal records
@@ -140,12 +141,27 @@ infrastructure mutation, production access. `permissions: {}` is a repository
 saying it grants nothing; no key at all is a repository that never considered the
 question, and that is refused.
 
-**This is a declaration, not an enforcement.** Only the filesystem and secret
-boundaries actually bite today, via hooks. Making the rest real needs a sandbox —
-network namespaces, a credential broker, an isolated database — and that is a
-slice of its own. The shape is here first because a declaration nobody wrote
-cannot be added afterwards: it would mean asking, a year from now, what every
-past run had been permitted to do.
+`secrets` is enforced, and it is the only entry here that is enforced by
+subtraction rather than by inspection. A command the engine spawns receives a
+fixed base — enough to find a binary and a home directory — plus what
+`env.vars` declares and exactly the names `secrets` grants. Nothing else is
+passed. A credential absent from an environment is unreachable by any spelling
+of any command, which is why this is the one control in this section that
+cannot be talked around; a granted name the machine does not export refuses at
+admission rather than surfacing later as an auth error inside a test run.
+
+**The rest is a declaration, not an enforcement.** Network egress, database
+access, infrastructure mutation and production access are recorded and not
+prevented. Making them real needs a sandbox — network namespaces, a credential
+broker, an isolated database — and that is a slice of its own. The shape is
+here first because a declaration nobody wrote cannot be added afterwards: it
+would mean asking, a year from now, what every past run had been permitted to
+do.
+
+In practice the subtraction already reaches further than its own row: dropping
+a table, destroying a volume and deploying to production all need a credential,
+so a run that was never handed one fails at those without any rule having to
+recognise them.
 
 ## The gate ladder
 
@@ -160,13 +176,33 @@ out of the model's hands.
 
 ## The guards
 
-Four hooks, all keyed on paths rather than on which role is acting — a guard that
+Five hooks, all keyed on paths rather than on which role is acting — a guard that
 asks who is calling can be talked out of its answer.
 
 They are **run-scoped**: enforcement begins when the engine exports
 `LITE_WORKTREE` and is dormant otherwise, because a guard that blocks ordinary
 interactive git in every project it is installed in gets uninstalled. Once a run
 is in flight, every undecidable case blocks.
+
+Two of them draw the same boundary at two surfaces: `worktree-boundary.sh` for
+Write and Edit, `bash-boundary.sh` for the shell. Both refuse a target they
+cannot resolve, which is what catches the accident neither a rule nor a model
+catches — `rm -rf "$BUILD_DIR"/` with the variable unset is `rm -rf /`, and at
+that moment nothing in anyone's reasoning has gone wrong.
+
+`main-branch-guard.sh` carries two rules that look alike and are not. A HEAD
+mutation is excused by worktree delegation, because a worktree HEAD is the run's
+own to move. Moving a **shared** ref is excused by nothing: `git -C "$WORKTREE"
+push origin main` is exactly as wrong as the bare form, so push is decided
+before the delegation logic and never reaches it.
+
+**What the shell guard is not.** It reads a command string, and capability
+belongs to the process that string starts — `node ./fix.js` is a legal
+in-worktree write followed by a program free to write anywhere. It is a net for
+the common accident, in the sense `secret-guard.sh` means it, and its detection
+is knowingly incomplete even though its decision is closed. The boundary that
+does not depend on recognising anything is the environment a run is spawned
+with, above.
 
 `LITE_GUARDS=off` disables all of them. It exists for debugging the harness
 itself; the orchestrator must never export it, and a run that needed it was
@@ -210,8 +246,8 @@ A budget nobody can fail is a wish. These fail the build.
 ## Development
 
 ```bash
-npm run check      # typecheck + 156 unit tests
-bats tests/shell/  # 58 hook tests
+npm run check      # typecheck + 172 unit tests
+bats tests/shell/  # 99 hook tests
 ```
 
 `.ts` files run directly under Node's type stripping — no build step. Conventions
@@ -243,9 +279,22 @@ and eventually edits the test to match. Two signals now buy one clean restart:
 the same error signature twice, and a diff that returns to a shape the run
 already produced.
 
-**Known gaps, deliberately.** Effect permissions are declared and not enforced;
-only the filesystem and secret boundaries bite, and the rest waits on a real
-sandbox. The shared budget is reconciled locally, so a contract retried on a
+Slice 4 closed the gap between what `permissions` declared and what a run was
+actually handed. Every command the engine spawned had inherited the operator's
+whole environment, so each gate held every credential that operator held while
+`permissions.secrets` sat in the declaration granting none — the declaration
+said nothing and the runtime gave everything, and nothing reported the
+disagreement. The same slice put a mechanism behind a rule that had none: this
+layer's own README says merging and releasing belong to whatever takes the
+candidate from here, and a run could force-push to the base branch and pass
+every guard in the repository.
+
+**Known gaps, deliberately.** Network egress, database access, infrastructure
+mutation and production access are declared and not enforced, and wait on a real
+sandbox; what limits them today is that a run holds no credential to reach them
+with. The shell guard reads command strings, so it is a net for accidents and
+not a boundary a determined process respects — one indirection through any
+interpreter is past it. The shared budget is reconciled locally, so a contract retried on a
 second machine refuses rather than proceeding — correct, but it refuses a case
 that should work. Concurrency is one claim per contract and nothing more: no
 merge queue, because text-level non-overlap is not semantic non-overlap and what

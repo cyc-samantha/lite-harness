@@ -40,6 +40,7 @@ import { accountFor, afterAttempt, readSpend, runningTotal, type Spend } from '.
 import { assemble, type RolePayload } from '../engine/prompt.ts';
 import { baseSha, branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, worktreeFiles, type Repo } from '../engine/repo.ts';
 import { describeViolations, scopeViolations } from '../engine/scope-check.ts';
+import { gateEnvironment, SecretUnavailable } from '../engine/environment.ts';
 import { canRun, shellRunner } from '../engine/shell.ts';
 import { advanced, elapsedMinutes, hasReached, loadState, newRun, remembering, saveState, type RunState } from '../engine/state.ts';
 
@@ -119,7 +120,28 @@ function preflightDeps(repo: Repo, source: WorkSource): PreflightDeps {
     trackedFiles: () => trackedFiles(repo),
     stateOf: (contractId) => source.stateOf(contractId),
     canRun: (command) => canRun(command, repo.runner, repo.root),
+    secretPresent: (name) => Boolean(process.env[name]),
   };
+}
+
+/**
+ * The environment one gate ladder runs in.
+ *
+ * Composed here rather than in the engine because it is the one place that may
+ * read the ambient process — and because `LITE_*` is this binary's own contract
+ * with the hooks, not something the engine knows about.
+ */
+function ladderEnvironment(project: ProjectConfig, runId: string, worktree: string, runDirectory: string): Record<string, string> {
+  const run = { LITE_RUN_ID: runId, LITE_WORKTREE: worktree, LITE_RUN_DIR: runDirectory };
+  try {
+    return gateEnvironment({ project, runId, run, ambient: process.env });
+  } catch (error) {
+    // WHY routed rather than thrown: admission already checks this, so reaching
+    // here means the machine changed under a run that was admitted elsewhere —
+    // a platform fact, and one an unhandled rejection would report as exit 1.
+    if (!(error instanceof SecretUnavailable)) throw error;
+    stop(routePreflight([{ check: 'secret_unavailable', reason: error.message }]), 'gate environment');
+  }
 }
 
 function runDir(config: Settings, runId: string): string {
@@ -484,7 +506,8 @@ async function commandGates(runId: string): Promise<void> {
   const prior = await priorSpend(config, state.contractId);
   const diffSignature = await diffDigest(repo, worktree, project.pr.base);
 
-  const ladder = await runLadder(contract, project, { cwd: worktree, runId, env: {} }, shellRunner);
+  const env = ladderEnvironment(project, runId, worktree, runDir(config, runId));
+  const ladder = await runLadder(contract, project, { cwd: worktree, runId, env }, shellRunner);
   await writeArtifact(config, runId, 'ladder.json', ladder);
   const gateRuns = state.gateRuns + ladder.outcomes.length;
 
