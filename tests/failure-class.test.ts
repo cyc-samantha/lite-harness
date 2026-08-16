@@ -13,6 +13,7 @@ import { classify, type Decision, type Observation } from '../engine/failure-tab
 
 const HEALTHY: Observation = {
   attemptsOnThisGate: 0,
+  freshRestarts: 0,
   sealBroken: false,
   scopeViolations: 0,
   baseMoved: false,

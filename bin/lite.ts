@@ -20,7 +20,7 @@
  * second `pr` call must not open a second pull request.
  */
 import { createHash } from 'node:crypto';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 
 import { parse } from 'yaml';
@@ -36,11 +36,12 @@ import { classify, errorSignature, type Observation } from '../engine/failure-ta
 import { runLadder, type GateOutcome, type LadderResult } from '../engine/gates.ts';
 import { renewLease } from '../engine/lease.ts';
 import { preflight, type PreflightDeps } from '../engine/preflight.ts';
+import { accountFor, afterAttempt, readSpend, runningTotal, type Spend } from '../engine/spend.ts';
 import { assemble, type RolePayload } from '../engine/prompt.ts';
 import { baseSha, branchName, changedPaths, createWorktree, diffAgainst, shaOfPath, trackedFiles, worktreeFiles, type Repo } from '../engine/repo.ts';
 import { describeViolations, scopeViolations } from '../engine/scope-check.ts';
 import { canRun, shellRunner } from '../engine/shell.ts';
-import { advanced, elapsedMinutes, hasReached, loadState, newRun, saveState, type RunState } from '../engine/state.ts';
+import { advanced, elapsedMinutes, hasReached, loadState, newRun, remembering, saveState, type RunState } from '../engine/state.ts';
 
 /** This harness's own install directory — where roles/ lives. */
 const HARNESS_ROOT = resolve(import.meta.dirname, '..');
@@ -253,12 +254,23 @@ const RUN_ATTEMPT_LIMIT = 2;
  * attempts yet" would remove the limit exactly when the source is unhealthy,
  * which is when runs are most likely to be failing and being retried.
  */
-async function refuseExhaustedContract(source: WorkSource, contractId: string): Promise<void> {
+async function refuseExhaustedContract(config: Settings, source: WorkSource, contractId: string): Promise<Spend> {
   const spent = await source.attemptsSpent(contractId).catch((error: unknown) =>
     fail(`cannot count the attempts already spent on ${contractId}: ${error instanceof Error ? error.message : String(error)}`),
   );
-  if (spent < RUN_ATTEMPT_LIMIT) return;
-  fail(`${contractId} has already had ${spent} run(s) and the limit is ${RUN_ATTEMPT_LIMIT}. A third attempt at unchanged work is a person's decision, not this run's.`);
+  if (spent >= RUN_ATTEMPT_LIMIT) {
+    fail(`${contractId} has already had ${spent} run(s) and the limit is ${RUN_ATTEMPT_LIMIT}. A third attempt at unchanged work is a person's decision, not this run's.`);
+  }
+  const prior = await priorSpend(config, contractId);
+  // The count and the cost have to agree. Attempts the source knows about that
+  // this ledger cannot account for were paid for somewhere this run cannot see,
+  // and starting one anyway hands it a ceiling somebody else already spent.
+  try {
+    accountFor(spent, prior);
+  } catch (error) {
+    fail(error instanceof Error ? error.message : String(error));
+  }
+  return prior;
 }
 
 /**
@@ -271,7 +283,7 @@ async function commandStart(contractId: string): Promise<void> {
   const repo: Repo = { root: config.targetRoot, runner: shellRunner };
   const project = await projectConfig(config.targetRoot);
 
-  await refuseExhaustedContract(source, contractId);
+  const prior = await refuseExhaustedContract(config, source, contractId);
   // Losing a race to claim is an ordinary outcome of polling a shared queue, not
   // a crash. A stack trace here would tell an operator to debug the harness when
   // the correct response is to take the next contract.
@@ -294,6 +306,7 @@ async function commandStart(contractId: string): Promise<void> {
       summary: `admission refused: ${verdict.failures.length} problem(s)`,
       payload: { failures: verdict.failures, ...routing },
     });
+    await settleSpend(config, state, prior);
     await source.fail(claim.runId);
     stop(routing, 'admission');
   }
@@ -326,26 +339,96 @@ function ceiling(): { maxGateRuns: number; maxWallMinutes: number } {
   };
 }
 
+/**
+ * Where a contract's running total is kept.
+ *
+ * Not in the run directory: the whole point is that it outlives the run. The
+ * contract id is hashed rather than used as a path because ids carry colons and
+ * slashes, and a budget file that lands in the wrong directory is a budget that
+ * silently resets.
+ */
+function spendPath(config: Settings, contractId: string): string {
+  return join(config.dataDir, 'contract', createHash('sha256').update(contractId).digest('hex').slice(0, 16), 'spend.json');
+}
+
+/**
+ * Closes this attempt's entry in the contract's running total.
+ *
+ * Called on every way a run ends — refused at admission, escalated, submitted —
+ * because the source counts all three as attempts. An ending that forgot to
+ * record itself makes the next claim unaccountable, which is the correct
+ * failure but a needless one.
+ */
+async function settleSpend(config: Settings, state: RunState, prior: Spend): Promise<void> {
+  const current = { gateRuns: state.gateRuns, wallMinutes: elapsedMinutes(state, now()) };
+  await writeSpend(config, state.contractId, afterAttempt(prior, current));
+}
+
+async function priorSpend(config: Settings, contractId: string): Promise<Spend> {
+  const raw = await readFile(spendPath(config, contractId), 'utf8').catch(() => undefined);
+  try {
+    return readSpend(raw === undefined ? undefined : (JSON.parse(raw) as unknown));
+  } catch (error) {
+    return fail(error instanceof Error ? error.message : String(error));
+  }
+}
+
+async function writeSpend(config: Settings, contractId: string, spend: Spend): Promise<void> {
+  const path = spendPath(config, contractId);
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, `${JSON.stringify(spend, null, 2)}\n`, 'utf8');
+}
+
+/**
+ * What the worktree currently looks like, as one comparable value.
+ *
+ * The diff itself is not kept — only whether this run has produced this shape
+ * before. Storing the patches would put the target repository's source into the
+ * harness's own data directory, which is neither this layer's to hold nor
+ * something anyone asked it to retain.
+ */
+async function diffDigest(repo: Repo, worktree: string, base: string): Promise<string> {
+  const patch = await diffAgainst(repo, worktree, base).catch(() => '');
+  return patch ? createHash('sha256').update(patch).digest('hex').slice(0, 16) : '';
+}
+
 /** Retries of this same gate, counting the red that just happened. */
 function attemptsOn(state: RunState, gateId: string): number {
   return state.lastRed?.gateId === gateId ? state.gateAttempts + 1 : 1;
 }
 
-function observe(state: RunState, red: GateOutcome, gateRuns: number): Observation {
+/** Everything the table needs that only this run knows. */
+interface Seen {
+  state: RunState;
+  red: GateOutcome;
+  gateRuns: number;
+  prior: Spend;
+  diffSignature: string;
+}
+
+function observe(seen: Seen): Observation {
+  const { state, red } = seen;
   const sameGate = state.lastRed?.gateId === red.gateId;
   return {
+    ...quiet(state, seen.gateRuns, seen.prior),
     redGate: { gateId: red.gateId, exitCode: red.exitCode, output: red.output },
     ...(sameGate && state.lastRed ? { previousSignature: state.lastRed.signature } : {}),
     attemptsOnThisGate: attemptsOn(state, red.gateId),
-    sealBroken: false,
-    scopeViolations: 0,
-    baseMoved: false,
-    budget: budgetNow(state, gateRuns),
+    diffSignature: seen.diffSignature,
+    earlierDiffs: state.diffSignatures,
   };
 }
 
-function budgetNow(state: RunState, gateRuns: number): Observation['budget'] {
-  return { gateRuns, wallMinutes: elapsedMinutes(state, now()), ...ceiling() };
+/** The half of an observation that holds whether or not a rung went red. */
+function quiet(state: RunState, gateRuns: number, prior: Spend): Observation {
+  return {
+    attemptsOnThisGate: 0,
+    sealBroken: false,
+    scopeViolations: 0,
+    baseMoved: false,
+    freshRestarts: state.freshRestarts,
+    budget: { ...runningTotal(prior, { gateRuns, wallMinutes: elapsedMinutes(state, now()) }), ...ceiling() },
+  };
 }
 
 async function commandGates(runId: string): Promise<void> {
@@ -356,6 +439,10 @@ async function commandGates(runId: string): Promise<void> {
   const project = await projectConfig(config.targetRoot);
   const worktree = state.worktree ?? fail('this run has no worktree');
 
+  const repo: Repo = { root: config.targetRoot, runner: shellRunner };
+  const prior = await priorSpend(config, state.contractId);
+  const diffSignature = await diffDigest(repo, worktree, project.pr.base);
+
   const ladder = await runLadder(contract, project, { cwd: worktree, runId, env: {} }, shellRunner);
   await writeArtifact(config, runId, 'ladder.json', ladder);
   const gateRuns = state.gateRuns + ladder.outcomes.length;
@@ -365,17 +452,29 @@ async function commandGates(runId: string): Promise<void> {
     await saveState(config.dataDir, { ...advanced(state, 'gates_passed', now()), gateRuns, gateAttempts: 0 });
     return;
   }
-  await reportRed(config, state, ladder, gateRuns);
+  await reportRed(config, { state, ladder, gateRuns, prior, diffSignature });
 }
 
-async function reportRed(config: Settings, state: RunState, ladder: LadderResult, gateRuns: number): Promise<void> {
+/** What one red ladder produced, kept together so the report reads one thing. */
+interface RedLadder {
+  state: RunState;
+  ladder: LadderResult;
+  gateRuns: number;
+  prior: Spend;
+  diffSignature: string;
+}
+
+async function reportRed(config: Settings, seen: RedLadder): Promise<void> {
+  const { state, ladder } = seen;
   const red = ladder.outcomes.at(-1) ?? fail('the ladder failed without a failing rung, which it cannot do');
-  const decision = classify(observe(state, red, gateRuns));
+  const decision = classify(observe({ ...seen, red }));
   await saveState(config.dataDir, {
     ...state,
-    gateRuns,
+    gateRuns: seen.gateRuns,
     gateAttempts: attemptsOn(state, red.gateId),
     lastRed: { gateId: red.gateId, signature: errorSignature(red.output) },
+    freshRestarts: state.freshRestarts + (decision.action === 'restart_fresh' ? 1 : 0),
+    diffSignatures: remembering(state, seen.diffSignature),
     updatedAt: now(),
   });
 
@@ -409,6 +508,7 @@ async function commandEscalate(runId: string, extra: string[]): Promise<void> {
     summary: packet.split('\n')[0]?.slice(0, 200) ?? 'escalated',
     payload: { packet, phase: state.phase, gate_runs: state.gateRuns, last_red: state.lastRed ?? null },
   });
+  await settleSpend(config, state, await priorSpend(config, state.contractId));
   await source.fail(runId);
   process.stdout.write(`${amending ? 'amendment proposed' : 'escalated'}; the work is back with its source\n`);
 }
@@ -432,13 +532,8 @@ async function commandScope(runId: string): Promise<void> {
   // A diff outside the boundary is not a red gate to fix and try again: widening
   // a sealed scope is not this run's decision to make, so it routes as a stop.
   // No rung failed, so none is invented — the observation says what happened.
-  const decision = classify({
-    attemptsOnThisGate: 0,
-    sealBroken: false,
-    scopeViolations: violations.length,
-    baseMoved: false,
-    budget: budgetNow(state, state.gateRuns),
-  });
+  const prior = await priorSpend(config, state.contractId);
+  const decision = classify({ ...quiet(state, state.gateRuns, prior), scopeViolations: violations.length });
   process.stderr.write(`${describeViolations(violations).map((v) => `  ${v}`).join('\n')}\n`);
   stop(routeDecision(decision), 'scope check');
 }
@@ -462,6 +557,7 @@ async function commandSubmit(runId: string): Promise<void> {
     envelopeSha: basisSha(await basisOf(config, runId)),
   });
   const verdict = await source.submit(runId, evidence);
+  await settleSpend(config, state, await priorSpend(config, state.contractId));
   await saveState(config.dataDir, advanced(state, 'submitted', now()));
   await writeArtifact(config, runId, 'verdict.json', verdict);
   process.stdout.write(`${JSON.stringify(verdict, null, 2)}\n`);

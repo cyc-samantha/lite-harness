@@ -18,13 +18,22 @@ export type FailureCategory =
   | 'world_moved'
   | 'environment'
   | 'no_progress'
+  | 'oscillating'
   | 'gate_failure'
   | 'unexplained';
 
 /**
  * `retry_in_place` means the same implementer, holding the context that produced
  * the code, is handed the failure. Spawning a fresh one throws away the most
- * valuable thing in the run and pays to rebuild a worse copy of it.
+ * valuable thing in the run and pays to rebuild a worse copy of it. That is the
+ * default and it is right nearly always.
+ *
+ * `restart_fresh` is the exception it needs. Context is not only an asset: an
+ * implementer that misread the architecture on its first attempt repairs from
+ * that misreading on its second, argues itself into it on its third, and edits
+ * the test to match on its fourth. None of that is a shortage of context — it is
+ * context that has become the failure. The policy is therefore to preserve it
+ * until the evidence says it has stopped helping, not to preserve it absolutely.
  */
 export type FailureAction =
   | 'fail_loud'
@@ -33,6 +42,7 @@ export type FailureAction =
   | 'rebase_and_retry'
   | 'retry'
   | 'retry_in_place'
+  | 'restart_fresh'
   | 'judge';
 
 export interface Decision {
@@ -66,6 +76,11 @@ export interface Observation {
   scopeViolations: number;
   baseMoved: boolean;
   budget: Budget;
+  /** A digest of the current diff, and the ones this run produced before it. */
+  diffSignature?: string;
+  earlierDiffs?: readonly string[];
+  /** How many times this run has already thrown its context away and started over. */
+  freshRestarts: number;
 }
 
 /** A command killed on timeout; see `engine/shell.ts`. */
@@ -147,15 +162,39 @@ function environment({ redGate }: Observation): Decision | undefined {
   };
 }
 
-function noProgress({ redGate, previousSignature }: Observation): Decision | undefined {
+/**
+ * How many times a run may throw its context away and start over before the
+ * problem is agreed not to be the context. One: if a clean reading of the
+ * contract also fails the same way, a second clean reading will too, and what is
+ * left is a question about the contract rather than about the implementation.
+ */
+export const FRESH_RESTART_LIMIT = 1;
+
+function stalled(category: FailureCategory, why: string, restarts: number): Decision {
+  if (restarts >= FRESH_RESTART_LIMIT) {
+    return { category, action: 'judge', countsTowardBudget: false, why: `${why}, and a fresh start already failed the same way` };
+  }
+  return { category, action: 'restart_fresh', countsTowardBudget: true, why };
+}
+
+function noProgress({ redGate, previousSignature, freshRestarts }: Observation): Decision | undefined {
   if (!redGate || previousSignature === undefined) return undefined;
   if (errorSignature(redGate.output) !== previousSignature) return undefined;
-  return {
-    category: 'no_progress',
-    action: 'judge',
-    countsTowardBudget: false,
-    why: `${redGate.gateId} failed identically twice, so the last attempt changed nothing that mattered`,
-  };
+  const why = `${redGate.gateId} failed identically twice, so the last repair changed nothing that mattered`;
+  return stalled('no_progress', why, freshRestarts);
+}
+
+/**
+ * A diff that has returned to a shape this run already produced.
+ *
+ * Two repairs that undo each other look like progress from inside — each one
+ * changes the code and each one is a real attempt — and look like a loop from
+ * outside. Only the outside view has the earlier diffs to compare against.
+ */
+function oscillating({ diffSignature, earlierDiffs, freshRestarts }: Observation): Decision | undefined {
+  if (!diffSignature || !earlierDiffs?.includes(diffSignature)) return undefined;
+  const why = 'this repair reproduced a diff the run had already tried, so the last two undid each other';
+  return stalled('oscillating', why, freshRestarts);
 }
 
 function gateFailure({ redGate, attemptsOnThisGate }: Observation): Decision | undefined {
@@ -197,6 +236,7 @@ const RULES: readonly Rule[] = [
   worldMoved,
   environment,
   noProgress,
+  oscillating,
   gateFailure,
 ];
 

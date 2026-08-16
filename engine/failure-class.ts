@@ -57,6 +57,7 @@ const BY_CATEGORY: Partial<Record<FailureCategory, Route>> = {
   budget_exhausted: ['HARD_STOP', 'EXECUTION'],
   scope_violation: ['HARD_STOP', 'EXECUTION'],
   no_progress: ['HARD_STOP', 'EXECUTION'],
+  oscillating: ['HARD_STOP', 'EXECUTION'],
   world_moved: ['RETRYABLE', 'EXTERNAL'],
   gate_failure: ['RETRYABLE', 'EXECUTION'],
 };
@@ -99,6 +100,9 @@ function environmentRoute(decision: Decision): Route {
 }
 
 function categoryRoute(decision: Decision): Route {
+  // Starting over with a clean context is still the loop doing its job, so it is
+  // retryable — the same failure once a fresh start has also failed is not.
+  if (decision.action === 'restart_fresh') return ['RETRYABLE', 'EXECUTION'];
   if (decision.category === 'environment') return environmentRoute(decision);
   if (decision.category === 'gate_failure' && decision.action === 'escalate') return ['HARD_STOP', 'EXECUTION'];
   return BY_CATEGORY[decision.category] ?? UNCLASSIFIED;

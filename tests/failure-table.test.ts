@@ -12,6 +12,7 @@ import { classify, errorSignature, GATE_RETRY_LIMIT, type Observation } from '..
 
 const HEALTHY: Observation = {
   attemptsOnThisGate: 0,
+  freshRestarts: 0,
   sealBroken: false,
   scopeViolations: 0,
   baseMoved: false,
@@ -63,11 +64,28 @@ describe('what the table decides', () => {
     expect(decision.countsTowardBudget).toBe(false);
   });
 
-  it('sends an identical repeat failure to a judge instead of retrying it again', () => {
+  it('starts over with a clean context when a repair changed nothing', () => {
     const output = 'TS2345: not assignable';
     const decision = classify(red({ previousSignature: errorSignature(output) }));
     expect(decision.category).toBe('no_progress');
+    expect(decision.action).toBe('restart_fresh');
+  });
+
+  it('stops asking for a clean context once a clean context has failed the same way', () => {
+    const output = 'TS2345: not assignable';
+    const decision = classify(red({ previousSignature: errorSignature(output), freshRestarts: 1 }));
     expect(decision.action).toBe('judge');
+    expect(decision.why).toContain('fresh start already failed');
+  });
+
+  it('starts over when a repair reproduced a diff the run had already tried', () => {
+    const decision = classify(red({ diffSignature: 'aaa', earlierDiffs: ['bbb', 'aaa'] }));
+    expect(decision.category).toBe('oscillating');
+    expect(decision.action).toBe('restart_fresh');
+  });
+
+  it('leaves a genuinely new diff alone, since changing the code is what repair is', () => {
+    expect(classify(red({ diffSignature: 'ccc', earlierDiffs: ['bbb', 'aaa'] })).category).toBe('gate_failure');
   });
 
   it('keeps retrying while the failure is genuinely changing', () => {
