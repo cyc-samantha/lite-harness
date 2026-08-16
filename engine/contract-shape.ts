@@ -54,6 +54,11 @@ export const executableContractSchema = z
     context: z.array(z.object({ uri: nonBlank, contentSha: nonBlank, why: nonBlank }).passthrough()),
     authority: z.object({ automationLevel: nonBlank }).passthrough(),
     dependsOn: z.array(z.string()),
+    // WHY required rather than defaulted: `blockingDecisions: []` and no key at
+    // all look identical once parsed, and they mean "we considered this and
+    // there are none" versus "nobody considered it". Only the first is safe to
+    // execute, so the declaration has to be written down to count.
+    blockingDecisions: z.array(z.object({ id: nonBlank, question: nonBlank, owner: nonBlank, deferred: z.boolean() }).passthrough()),
   })
   .passthrough()
   .superRefine(requireUniqueIds);

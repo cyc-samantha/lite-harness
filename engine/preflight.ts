@@ -16,7 +16,7 @@
 import { minimatch } from 'minimatch';
 
 import type { ProjectConfig } from '../ports/project-capabilities.ts';
-import type { AcceptanceCriterion, WorkContract, WorkItemState } from '../ports/work-source.ts';
+import { needsSignature, type AcceptanceCriterion, type WorkContract, type WorkItemState } from '../ports/work-source.ts';
 
 import { shapeProblems } from './contract-shape.ts';
 
@@ -25,10 +25,14 @@ export type PreflightCheck =
   | 'seal_integrity'
   | 'authority'
   | 'dependencies'
+  | 'unevidenceable_criterion'
   | 'capability_match'
   | 'scope_resolvable'
   | 'protected_path_conflict'
-  | 'environment_ready';
+  | 'environment_ready'
+  | 'unaccepted_proposal'
+  | 'unanswered_decision'
+  | 'missing_signature';
 
 export interface PreflightFailure {
   check: PreflightCheck;
@@ -88,18 +92,58 @@ function evidenceProblem(criterion: AcceptanceCriterion): string | undefined {
   return `${criterion.id} uses deterministic_assertion, which this engine cannot evidence — name a test and use executable_test`;
 }
 
-function checkCapabilities(contract: WorkContract, project: ProjectConfig): PreflightFailure[] {
-  const unevidenceable = contract.acceptance
+/**
+ * The two halves route to different people, so they are two checks. A criterion
+ * nothing can evidence is the spec author's to reword; a project that declares
+ * no way to run one is the platform's to fix.
+ */
+function checkEvidenceable(contract: WorkContract): PreflightFailure[] {
+  return contract.acceptance
     .map(evidenceProblem)
     .filter((reason) => reason !== undefined)
-    .map((reason) => failure('capability_match', reason));
+    .map((reason) => failure('unevidenceable_criterion', reason));
+}
 
+function checkCapabilities(contract: WorkContract, project: ProjectConfig): PreflightFailure[] {
   const needsRunner = contract.acceptance.some((entry) => entry.verification === 'executable_test');
   const hasRunner = project.gates.some((gate) => gate.per_criterion);
-  if (!needsRunner || hasRunner) return unevidenceable;
+  if (!needsRunner || hasRunner) return [];
 
   const reason = 'contract names executable tests but project.yaml declares no per_criterion gate to run them';
-  return [...unevidenceable, failure('capability_match', reason)];
+  return [failure('capability_match', reason)];
+}
+
+/**
+ * A criterion the system suggested is not yet anybody's requirement. Building one
+ * produces work nobody asked for, argued convincingly from a document that looks
+ * exactly like a requirement.
+ */
+function checkProposals(contract: WorkContract): PreflightFailure[] {
+  return contract.acceptance
+    .filter((criterion) => criterion.provenance === 'proposed')
+    .map((criterion) => failure('unaccepted_proposal', `${criterion.id} is a proposal awaiting acceptance, not a requirement`));
+}
+
+/**
+ * SAFETY: a decision this run cannot see answered is treated as unanswered. The
+ * seal is the only document a run is given, so an answer recorded anywhere else
+ * is one it cannot confirm — and the cost of assuming it exists is an agent that
+ * invents the answer instead, which is exactly what a decision queue prevents.
+ * The fix for a false refusal is for the seal to carry the answer.
+ */
+function checkDecisions(contract: WorkContract): PreflightFailure[] {
+  return contract.blockingDecisions
+    .filter((decision) => !decision.deferred && !decision.answer?.trim())
+    .map((decision) =>
+      failure('unanswered_decision', `${decision.id} ("${decision.question}") is unanswered in the seal; ${decision.owner} owns it`),
+    );
+}
+
+/** SAFETY: as above — a signature the seal does not carry is one this run cannot verify. */
+function checkSignature(contract: WorkContract): PreflightFailure[] {
+  if (!needsSignature(contract) || contract.signature?.by.trim()) return [];
+  const why = `${contract.irreversibility}/${contract.risk} work needs a named counter-signature, and the seal carries none`;
+  return [failure('missing_signature', why)];
 }
 
 function matching(patterns: string[], files: string[]): string[] {
@@ -150,6 +194,10 @@ export async function preflight(
     ...(await checkSeal(contract, deps)),
     ...checkAuthority(contract),
     ...(await checkDependencies(contract, deps)),
+    ...checkProposals(contract),
+    ...checkDecisions(contract),
+    ...checkSignature(contract),
+    ...checkEvidenceable(contract),
     ...checkCapabilities(contract, project),
     ...checkScopeResolves(contract, files),
     ...checkProtectedPaths(contract, project, files),

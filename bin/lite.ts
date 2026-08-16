@@ -30,8 +30,9 @@ import { loadProjectConfig, type ProjectConfig } from '../ports/project-capabili
 import type { Checkpoint, WorkContract, WorkSource } from '../ports/work-source.ts';
 
 import { basisSha, sealBasis, type ExecutionBasis } from '../engine/envelope.ts';
+import { EXIT_CODE, routeDecision, routePreflight, type NextActor, type Routing } from '../engine/failure-class.ts';
 import { evidenceFrom, type TestLocator } from '../engine/evidence.ts';
-import { classify, errorSignature, type FailureAction, type Observation } from '../engine/failure-table.ts';
+import { classify, errorSignature, type Observation } from '../engine/failure-table.ts';
 import { runLadder, type GateOutcome, type LadderResult } from '../engine/gates.ts';
 import { renewLease } from '../engine/lease.ts';
 import { preflight, type PreflightDeps } from '../engine/preflight.ts';
@@ -69,6 +70,27 @@ function fail(message: string): never {
   process.stderr.write(`${message}\n`);
   process.exit(1);
 }
+
+/**
+ * Stops with the class as the exit code, and says the three things a reader
+ * needs in one screen: where it stopped, what came out, and who acts next.
+ *
+ * The reader is the engineer who wrote the spec, not the platform team. A
+ * category name alone sends them to ask somebody what it means.
+ */
+function stop(routing: Routing, where: string): never {
+  process.stderr.write(`\n${routing.failure_class} (${routing.failure_origin}) at ${where}\n\n`);
+  process.stderr.write(`${routing.reason}\n\n`);
+  process.stderr.write(`next: ${NEXT_STEP[routing.next_actor]}\n`);
+  process.exit(EXIT_CODE[routing.failure_class]);
+}
+
+const NEXT_STEP: Record<NextActor, string> = {
+  SPEC_AUTHOR: 'whoever wrote this spec — the contract has to change before a run can succeed',
+  SYSTEM: 'nobody. Fix it in place and run the gates again',
+  NAMED_HUMAN: 'a named person, to decide or to sign. This is not work waiting on work',
+  PLATFORM: 'the platform. Retrying will reproduce this exactly',
+};
 
 async function projectConfig(targetRoot: string): Promise<ProjectConfig> {
   const path = join(targetRoot, '.harness', 'project.yaml');
@@ -266,13 +288,14 @@ async function commandStart(contractId: string): Promise<void> {
 
   const verdict = await preflight(claim.contract, project, preflightDeps(repo, source));
   if (!verdict.ok) {
+    const routing = routePreflight(verdict.failures);
     await sendCheckpoint(to, ENGINE, {
       step: 'preflight_refused',
       summary: `admission refused: ${verdict.failures.length} problem(s)`,
-      payload: { failures: verdict.failures },
+      payload: { failures: verdict.failures, ...routing },
     });
     await source.fail(claim.runId);
-    fail(verdict.failures.map((entry) => `  [${entry.check}] ${entry.reason}`).join('\n'));
+    stop(routing, 'admission');
   }
 
   const worktree = worktreeFor(config, claim.runId);
@@ -317,17 +340,13 @@ function observe(state: RunState, red: GateOutcome, gateRuns: number): Observati
     sealBroken: false,
     scopeViolations: 0,
     baseMoved: false,
-    budget: { gateRuns, wallMinutes: elapsedMinutes(state, now()), ...ceiling() },
+    budget: budgetNow(state, gateRuns),
   };
 }
 
-/**
- * A red rung the orchestrator should repair in place exits 2; anything it must
- * not simply retry exits 3. The distinction is the whole point of the table —
- * without it every failure looks like "try again", which is how a run spends its
- * budget discovering nothing.
- */
-const RETRYABLE: readonly FailureAction[] = ['retry', 'retry_in_place', 'rebase_and_retry'];
+function budgetNow(state: RunState, gateRuns: number): Observation['budget'] {
+  return { gateRuns, wallMinutes: elapsedMinutes(state, now()), ...ceiling() };
+}
 
 async function commandGates(runId: string): Promise<void> {
   const config = settings();
@@ -360,9 +379,9 @@ async function reportRed(config: Settings, state: RunState, ladder: LadderResult
     updatedAt: now(),
   });
 
-  process.stdout.write(`\nstopped at ${ladder.stoppedAt}\n\n${red.output}\n`);
-  process.stdout.write(`\n${decision.category} → ${decision.action}\n${decision.why}\n`);
-  process.exit(RETRYABLE.includes(decision.action) ? 2 : 3);
+  process.stdout.write(`\n${red.output}\n`);
+  process.stdout.write(`\n${decision.category} → ${decision.action}\n`);
+  stop(routeDecision(decision), `gate "${ladder.stoppedAt ?? red.gateId}"`);
 }
 
 /**
@@ -410,8 +429,18 @@ async function commandScope(runId: string): Promise<void> {
     process.stdout.write(`${changed.length} file(s) changed, all inside scope\n`);
     return;
   }
-  process.stderr.write(`change left the contract's boundary:\n${describeViolations(violations).map((v) => `  ${v}`).join('\n')}\n`);
-  process.exit(2);
+  // A diff outside the boundary is not a red gate to fix and try again: widening
+  // a sealed scope is not this run's decision to make, so it routes as a stop.
+  // No rung failed, so none is invented — the observation says what happened.
+  const decision = classify({
+    attemptsOnThisGate: 0,
+    sealBroken: false,
+    scopeViolations: violations.length,
+    baseMoved: false,
+    budget: budgetNow(state, state.gateRuns),
+  });
+  process.stderr.write(`${describeViolations(violations).map((v) => `  ${v}`).join('\n')}\n`);
+  stop(routeDecision(decision), 'scope check');
 }
 
 async function commandSubmit(runId: string): Promise<void> {
